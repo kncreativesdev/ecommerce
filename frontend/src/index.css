@@ -1,0 +1,366 @@
+@import "tailwindcss";
+
+/*
+ * Tech Pulse — central theme source.
+ *
+ * Tailwind CSS v4 CSS-first architecture:
+ * - Light values live on `:root`, dark values on `.dark` (class on <html>).
+ * - `@theme inline` exposes the semantic tokens to Tailwind utilities
+ *   (bg-background, text-foreground, border-border, ring-ring, …).
+ * - `@custom-variant dark` wires the `dark:` variant to the `.dark` class.
+ * - Components consume ONLY semantic tokens — never raw palette literals.
+ *
+ * Visual direction: premium Indian electronics commerce — near-black chrome,
+ * white/light content surfaces, restrained red action accent. Red is the
+ * recognizable Tech Pulse action color (CTAs, active nav, badges, focus);
+ * it is an accent, never the whole interface.
+ *
+ * Chrome tokens (`header*`) describe the intentionally fixed-dark navigation
+ * chrome in BOTH themes — this is global chrome, not a per-component fork.
+ * To rebrand globally, edit the `primary` / `accent` / `ring` values below.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-background: var(--tp-background);
+  --color-foreground: var(--tp-foreground);
+
+  --color-surface: var(--tp-surface);
+  --color-surface-muted: var(--tp-surface-muted);
+  --color-surface-elevated: var(--tp-surface-elevated);
+
+  --color-border: var(--tp-border);
+  --color-border-muted: var(--tp-border-muted);
+  --color-border-strong: var(--tp-border-strong);
+
+  --color-header: var(--tp-header);
+  --color-header-foreground: var(--tp-header-foreground);
+  --color-header-muted: var(--tp-header-muted);
+  --color-header-border: var(--tp-header-border);
+
+  --color-primary: var(--tp-primary);
+  --color-primary-foreground: var(--tp-primary-foreground);
+
+  --color-secondary: var(--tp-secondary);
+  --color-secondary-foreground: var(--tp-secondary-foreground);
+
+  --color-accent: var(--tp-accent);
+  --color-accent-foreground: var(--tp-accent-foreground);
+  --color-accent-hover: var(--tp-accent-hover);
+  --color-accent-link: var(--tp-accent-link);
+
+  --color-muted: var(--tp-muted);
+  --color-muted-foreground: var(--tp-muted-foreground);
+
+  --color-success: var(--tp-success);
+  --color-warning: var(--tp-warning);
+
+  --color-destructive: var(--tp-destructive);
+  --color-destructive-foreground: var(--tp-destructive-foreground);
+
+  --color-card: var(--tp-card);
+  --color-card-foreground: var(--tp-card-foreground);
+
+  --color-input: var(--tp-input);
+  --color-ring: var(--tp-ring);
+
+  --font-sans: var(--tp-font-sans);
+  --font-display: var(--tp-font-sans);
+
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+
+  --shadow-sm: var(--tp-shadow-sm);
+  --shadow-lg: var(--tp-shadow-lg);
+  --shadow-2xl: var(--tp-shadow-2xl);
+}
+
+/* ------------------------------------------------------------------ */
+/* Theme values — light (commercial black/white/red foundation)        */
+/* ------------------------------------------------------------------ */
+
+:root {
+  color-scheme: light;
+
+  --tp-background: #ffffff;
+  --tp-foreground: #111111;
+
+  --tp-surface: #ffffff;
+  --tp-surface-muted: #f5f5f5;
+  --tp-surface-elevated: #ffffff;
+
+  --tp-border: #e5e5e5;
+  --tp-border-muted: #f0f0f0;
+  --tp-border-strong: #d4d4d4;
+
+  --tp-header: #0b0b0b;
+  --tp-header-foreground: #ffffff;
+  --tp-header-muted: #b3b3b3;
+  --tp-header-border: #262626;
+
+  --tp-primary: #0b0b0b;
+  --tp-primary-foreground: #ffffff;
+
+  --tp-secondary: #f5f5f5;
+  --tp-secondary-foreground: #111111;
+
+  --tp-accent: #e21b23;
+  --tp-accent-foreground: #ffffff;
+  --tp-accent-hover: #b91419;
+  /* Readable accent text on light surfaces — identical to --tp-accent. */
+  --tp-accent-link: #e21b23;
+
+  --tp-muted: #f5f5f5;
+  --tp-muted-foreground: #6b6b6b;
+
+  --tp-success: #15803d;
+  --tp-warning: #b45309;
+
+  --tp-destructive: #dc2626;
+  --tp-destructive-foreground: #ffffff;
+
+  --tp-card: #ffffff;
+  --tp-card-foreground: #111111;
+
+  --tp-input: #d4d4d4;
+  --tp-ring: #e21b23;
+
+  --tp-font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+
+  --tp-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  --tp-shadow-lg:
+    0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --tp-shadow-2xl:
+    0 25px 50px -12px rgb(0 0 0 / 0.25);
+
+  /* Motion foundation tokens (theme-invariant) */
+  --tp-duration-fast: 150ms;
+  --tp-duration-base: 200ms;
+  --tp-duration-slow: 300ms;
+  --tp-ease-out: cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* ------------------------------------------------------------------ */
+/* Theme values — dark (deliberately designed, not an inversion)       */
+/* Near-black page, stepped-up elevated surfaces, border-led depth,    */
+/* red accent carried over as the shared action color.                 */
+/* ------------------------------------------------------------------ */
+
+.dark {
+  color-scheme: dark;
+
+  --tp-background: #090909;
+  --tp-foreground: #f5f5f5;
+
+  --tp-surface: #111111;
+  --tp-surface-muted: #1a1a1a;
+  --tp-surface-elevated: #171717;
+
+  --tp-border: #262626;
+  --tp-border-muted: #1c1c1c;
+  --tp-border-strong: #404040;
+
+  --tp-header: #111111;
+  --tp-header-foreground: #f5f5f5;
+  --tp-header-muted: #a3a3a3;
+  --tp-header-border: #262626;
+
+  --tp-primary: #e21b23;
+  --tp-primary-foreground: #ffffff;
+
+  --tp-secondary: #1a1a1a;
+  --tp-secondary-foreground: #f5f5f5;
+
+  --tp-accent: #e21b23;
+  --tp-accent-foreground: #ffffff;
+  --tp-accent-hover: #f1353c;
+  /* Readable accent text on dark surfaces — brightened past AA while fills
+     keep --tp-accent (no single red passes AA both as text-on-dark and as
+     a white-text fill, so the roles stay split by design). */
+  --tp-accent-link: #f25555;
+
+  --tp-muted: #171717;
+  --tp-muted-foreground: #a3a3a3;
+
+  --tp-success: #4ade80;
+  --tp-warning: #fbbf24;
+
+  --tp-destructive: #f87171;
+  --tp-destructive-foreground: #090909;
+
+  --tp-card: #111111;
+  --tp-card-foreground: #f5f5f5;
+
+  --tp-input: #404040;
+  --tp-ring: #e21b23;
+
+  --tp-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --tp-shadow-lg:
+    0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.5);
+  --tp-shadow-2xl:
+    0 25px 50px -12px rgb(0 0 0 / 0.6);
+}
+
+/* ------------------------------------------------------------------ */
+/* Global base styles (layered so utilities can override them)        */
+/* ------------------------------------------------------------------ */
+/* Tailwind v4 uses cascade layers (theme < base < components <        */
+/* utilities). Plain unlayered CSS beats ALL layered CSS regardless   */
+/* of specificity, so element resets MUST live in `@layer base` —     */
+/* otherwise e.g. `button { color: inherit }` overrides                */
+/* `.text-secondary-foreground` utilities on every button.             */
+/* ------------------------------------------------------------------ */
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    min-height: 100svh;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    overflow-x: clip;
+  }
+
+  #root {
+    min-height: 100svh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Accessible default link behavior: underline on hover, never color-only. */
+  a {
+    text-decoration-skip-ink: auto;
+    text-underline-offset: 3px;
+  }
+
+  a:hover {
+    text-decoration: none;
+  }
+
+  /* Form elements inherit typography from the surrounding context. */
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* Responsive media defaults. */
+  img,
+  video,
+  svg {
+    max-width: 100%;
+  }
+
+  img,
+  video {
+    height: auto;
+  }
+
+  /* Text selection follows the brand tokens. */
+  ::selection {
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+  }
+
+  /*
+   * Visible keyboard focus everywhere. Never remove outlines without a
+   * replacement — this ring IS the replacement.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* Shared page container: responsive gutters + max width (PAGES.md rhythm). */
+  .tp-container {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 80rem; /* max-w-7xl */
+    padding-inline: 1rem;
+  }
+
+  @media (min-width: 640px) {
+    .tp-container {
+      padding-inline: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .tp-container {
+      padding-inline: 2rem;
+    }
+  }
+
+  .tp-shimmer {
+    animation: tp-shimmer 1.6s ease-in-out infinite;
+  }
+
+  /* Subtle active-slide entrance for the homepage hero (one-shot; the
+     global reduced-motion override below neutralizes it on request, and
+     the component additionally skips the class when reduced motion is
+     detected via matchMedia). */
+  .tp-hero-enter {
+    animation: tp-hero-enter 0.5s ease-out both;
+  }
+}
+
+/* Skeleton shimmer (both themes via surface-muted token). */
+/* @keyframes stays unlayered by design; `.tp-shimmer` above lives in
+   `@layer components` so utilities can override it when needed. */
+@keyframes tp-shimmer {
+  0% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.55;
+  }
+}
+
+/* @keyframes stays unlayered by design (same reasoning as tp-shimmer). */
+@keyframes tp-hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Honor reduced-motion preferences: no smooth scroll, shimmer, or lifts. */
+/* Intentionally unlayered + !important: accessibility override must beat
+   utilities (including `animate-*` / `transition-*`) in both themes. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,33 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+pnpm-error.log*
+
+node_modules
+dist
+dist-ssr
+# Env files (VITE_* is bundled into the browser; never commit real .env)
+.env
+.env.*
+!.env.example
+*.local
+# Build / test artifacts
+build
+coverage
+.vite
+*.tmp
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

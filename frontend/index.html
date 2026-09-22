@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Tech Pulse — premium consumer electronics and gadget accessories. Cash on Delivery, honest pricing, light and dark themes."
+    />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#090909" />
+    <title>Tech Pulse — Premium Electronics Store</title>
+    <script>
+      // Pre-paint theme bootstrap: applies the persisted (tp-theme) or system
+      // theme before first paint to avoid a flash of the wrong theme.
+      // Mirrors the resolution logic in src/stores/useThemeStore.js — keep in sync.
+      (function () {
+        try {
+          var stored = localStorage.getItem('tp-theme');
+          var resolved =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          if (resolved === 'dark') document.documentElement.classList.add('dark');
+          document.documentElement.style.colorScheme = resolved;
+        } catch (e) {
+          /* localStorage unavailable — fall back to light theme */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,228 @@
+@import "tailwindcss";
+
+/*
+ * Tech Pulse Admin — central theme source.
+ *
+ * Separate application from the customer storefront: a clean, professional
+ * management dashboard (compact sidebar + top bar + content area), NOT the
+ * storefront's black/red commerce language. Same CSS-first Tailwind v4
+ * philosophy: semantic tokens consumed by components, never raw palette
+ * literals in JSX. Light values on `:root`, dark values on `.dark`.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-background: var(--ta-background);
+  --color-foreground: var(--ta-foreground);
+
+  --color-surface: var(--ta-surface);
+  --color-surface-muted: var(--ta-surface-muted);
+  --color-surface-elevated: var(--ta-surface-elevated);
+
+  --color-border: var(--ta-border);
+  --color-border-muted: var(--ta-border-muted);
+  --color-border-strong: var(--ta-border-strong);
+
+  --color-sidebar: var(--ta-sidebar);
+  --color-sidebar-foreground: var(--ta-sidebar-foreground);
+  --color-sidebar-muted: var(--ta-sidebar-muted);
+  --color-sidebar-active: var(--ta-sidebar-active);
+
+  --color-primary: var(--ta-primary);
+  --color-primary-foreground: var(--ta-primary-foreground);
+
+  --color-secondary: var(--ta-secondary);
+  --color-secondary-foreground: var(--ta-secondary-foreground);
+
+  --color-accent: var(--ta-accent);
+  --color-accent-foreground: var(--ta-accent-foreground);
+
+  --color-muted: var(--ta-muted);
+  --color-muted-foreground: var(--ta-muted-foreground);
+
+  --color-success: var(--ta-success);
+  --color-warning: var(--ta-warning);
+
+  --color-destructive: var(--ta-destructive);
+  --color-destructive-foreground: var(--ta-destructive-foreground);
+
+  --color-card: var(--ta-card);
+  --color-card-foreground: var(--ta-card-foreground);
+
+  --color-input: var(--ta-input);
+  --color-ring: var(--ta-ring);
+
+  --font-sans: var(--ta-font-sans);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  --shadow-sm: var(--ta-shadow-sm);
+  --shadow-lg: var(--ta-shadow-lg);
+}
+
+:root {
+  color-scheme: light;
+
+  --ta-background: #f4f5f7;
+  --ta-foreground: #0f172a;
+
+  --ta-surface: #ffffff;
+  --ta-surface-muted: #eef0f4;
+  --ta-surface-elevated: #ffffff;
+
+  --ta-border: #e2e8f0;
+  --ta-border-muted: #eef0f4;
+  --ta-border-strong: #cbd5e1;
+
+  --ta-sidebar: #111c33;
+  --ta-sidebar-foreground: #f1f5f9;
+  --ta-sidebar-muted: #94a3b8;
+  --ta-sidebar-active: #ffffff;
+
+  --ta-primary: #1d4ed8;
+  --ta-primary-foreground: #ffffff;
+
+  --ta-secondary: #eef0f4;
+  --ta-secondary-foreground: #0f172a;
+
+  --ta-accent: #0ea5e9;
+  --ta-accent-foreground: #ffffff;
+
+  --ta-muted: #eef0f4;
+  --ta-muted-foreground: #64748b;
+
+  --ta-success: #16a34a;
+  --ta-warning: #d97706;
+
+  --ta-destructive: #dc2626;
+  --ta-destructive-foreground: #ffffff;
+
+  --ta-card: #ffffff;
+  --ta-card-foreground: #0f172a;
+
+  --ta-input: #cbd5e1;
+  --ta-ring: #1d4ed8;
+
+  --ta-font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+
+  --ta-shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.06);
+  --ta-shadow-lg:
+    0 10px 15px -3px rgb(15 23 42 / 0.1), 0 4px 6px -4px rgb(15 23 42 / 0.1);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --ta-background: #0b0d12;
+  --ta-foreground: #e5e9f0;
+
+  --ta-surface: #12161e;
+  --ta-surface-muted: #1a2029;
+  --ta-surface-elevated: #171d26;
+
+  --ta-border: #232b36;
+  --ta-border-muted: #1a2029;
+  --ta-border-strong: #39424f;
+
+  --ta-sidebar: #0d1117;
+  --ta-sidebar-foreground: #e5e9f0;
+  --ta-sidebar-muted: #8b94a3;
+  --ta-sidebar-active: #ffffff;
+
+  --ta-primary: #60a5fa;
+  --ta-primary-foreground: #0b0d12;
+
+  --ta-secondary: #1a2029;
+  --ta-secondary-foreground: #e5e9f0;
+
+  --ta-accent: #38bdf8;
+  --ta-accent-foreground: #0b0d12;
+
+  --ta-muted: #1a2029;
+  --ta-muted-foreground: #9aa4b2;
+
+  --ta-success: #4ade80;
+  --ta-warning: #fbbf24;
+
+  --ta-destructive: #f87171;
+  --ta-destructive-foreground: #0b0d12;
+
+  --ta-card: #12161e;
+  --ta-card-foreground: #e5e9f0;
+
+  --ta-input: #39424f;
+  --ta-ring: #60a5fa;
+
+  --ta-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --ta-shadow-lg:
+    0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.5);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100svh;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: clip;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+a {
+  text-decoration-skip-ink: auto;
+  text-underline-offset: 3px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background-color: var(--color-primary);
+  color: var(--color-primary-foreground);
+}
+
+/* Visible keyboard focus everywhere — never remove without replacement. */
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
