@@ -95,7 +95,7 @@ function MediaThumb({ image, size = 'h-14 w-14' }) {
       alt=""
       loading="lazy"
       onError={() => setFailed(true)}
-      className={`${size} rounded-lg border border-border bg-surface-muted object-cover`}
+      className={`${size} rounded-lg border border-border bg-surface-muted object-contain`}
     />
   );
 }
@@ -278,7 +278,7 @@ function UploadForm({ productId, variants, submitting, setSubmitting, onDone, on
               className="flex items-center gap-3 rounded-lg border border-border bg-surface-muted/50 p-2.5"
             >
               {entry.url ? (
-                <img src={entry.url} alt="" className="h-12 w-12 shrink-0 rounded-md border border-border object-cover" />
+                <img src={entry.url} alt="" className="h-12 w-12 shrink-0 rounded-md border border-border bg-surface-muted object-contain" />
               ) : (
                 <span aria-hidden="true" className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-border bg-surface-muted text-muted-foreground">
                   <ImageIcon size={18} />

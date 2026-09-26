@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Image as ImageIcon, ReceiptText } from 'lucide-react';
+import { ArrowLeft, ReceiptText } from 'lucide-react';
 import { toast } from 'sonner';
-import { resolveImageUrl } from '../services/media.service.js';
 import { useOrderStore } from '../stores/useOrderStore.js';
 import { updateOrderPaymentStatus, updateOrderStatus } from '../services/order.service.js';
 import {
@@ -20,6 +19,7 @@ import { PageHeader } from '../components/ui/PageHeader.jsx';
 import { Table } from '../components/ui/Table.jsx';
 import { Modal } from '../components/ui/Modal.jsx';
 import { OrderStatusBadge, PaymentMethodBadge, PaymentStatusBadge } from '../components/orders/OrderBadges.jsx';
+import { OrderItemThumb } from '../components/orders/OrderItemThumb.jsx';
 import { OrderTimeline } from '../components/orders/OrderTimeline.jsx';
 import { formatDateTime, formatINR } from '../lib/format.js';
 import { cn } from '../lib/cn.js';
@@ -51,35 +51,6 @@ const ITEM_COLUMNS = [
   { key: 'unit', label: 'Unit price' },
   { key: 'total', label: 'Line total', numeric: true },
 ];
-
-/**
- * Historical purchased-variant image from the order snapshot
- * (`imageStoragePath`, immutable). Pre-snapshot orders carry null and
- * render the neutral placeholder — live variant media is never consulted
- * for history.
- */
-function OrderItemThumb({ item }) {
-  const url = resolveImageUrl(item?.imageStoragePath ? { storagePath: item.imageStoragePath } : null);
-  if (!url) {
-    return (
-      <span
-        aria-label="No image snapshot for this item"
-        title="No image snapshot for this item"
-        className="inline-flex h-12 w-12 items-center justify-center rounded-lg bg-surface-muted text-muted-foreground"
-      >
-        <ImageIcon size={20} aria-hidden="true" />
-      </span>
-    );
-  }
-  return (
-    <img
-      src={url}
-      alt=""
-      loading="lazy"
-      className="h-12 w-12 rounded-lg border border-border bg-surface-muted object-cover"
-    />
-  );
-}
 
 function Section({ title, children, className }) {
   return (
@@ -365,7 +336,7 @@ export function OrderDetailPage() {
               {detail.items.map((item) => (
                 <tr key={item.id} className="transition-colors hover:bg-surface-muted/50">
                   <td className="px-4 py-3">
-                    <OrderItemThumb item={item} />
+                    <OrderItemThumb imageStoragePath={item?.imageStoragePath ?? null} label="this item" size="h-12 w-12" />
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-semibold text-foreground">{item.productName}</p>

@@ -89,7 +89,7 @@ export function PendingProductImages({ onSelectionChange, disabled = false, titl
               className="flex items-center gap-3 rounded-lg border border-border bg-surface-muted/50 p-2.5"
             >
               {entry.url ? (
-                <img src={entry.url} alt={`Preview of ${entry.name}`} className="h-12 w-12 shrink-0 rounded-md border border-border object-cover" />
+                <img src={entry.url} alt={`Preview of ${entry.name}`} className="h-12 w-12 shrink-0 rounded-md border border-border bg-surface-muted object-contain" />
               ) : (
                 <span aria-hidden="true" className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-border bg-surface-muted text-muted-foreground">
                   <ImageIcon size={18} />

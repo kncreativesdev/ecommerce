@@ -38,6 +38,12 @@ function pickPrimary(images) {
  * galleries for Variant A never render Variant B's images. One cached
  * `GET /products/:id/images` per product per session, shared across every
  * instance; no extra requests per variant.
+ *
+ * Presentation defaults to uncropped `object-contain` (preserves uploaded
+ * proportions; `bg-surface-muted` fills the letterbox area). Callers may
+ * override via `imgClassName` — the product card intentionally opts into
+ * `object-cover` as a card-presentation decision (resolved last via
+ * tailwind-merge, so it wins over the default).
  */
 export function ProductImage({ productId, variantId = null, alt, className, imgClassName, eager = false }) {
   const [loaded, setLoaded] = useState({ productId, variantId, url: null });
@@ -73,7 +79,7 @@ export function ProductImage({ productId, variantId = null, alt, className, imgC
       alt={alt || 'Product image'}
       loading={eager ? 'eager' : 'lazy'}
       onError={() => setFailedUrl(current)}
-      className={cn('h-full w-full bg-surface-muted object-cover', imgClassName, className)}
+      className={cn('h-full w-full bg-surface-muted object-contain', imgClassName, className)}
     />
   );
 }

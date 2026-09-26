@@ -85,7 +85,12 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
           aria-label={product.name}
           className="relative block aspect-square hover:no-underline"
         >
-          <ProductImage productId={product.id} variantId={variant?.id ?? null} alt={product.name} />
+          <ProductImage
+            productId={product.id}
+            variantId={variant?.id ?? null}
+            alt={product.name}
+            imgClassName="object-cover"
+          />
         </Link>
         {discount !== null ? (
           <span className="absolute left-2.5 top-2.5 rounded-full bg-accent px-2.5 py-1 text-[11px] font-bold text-accent-foreground">
@@ -126,15 +131,9 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
             <p className="text-sm text-muted-foreground">Price unavailable</p>
           )}
         </div>
-        {stockState !== null ? (
-          <p
-            aria-live="polite"
-            className={cn(
-              'text-xs font-semibold',
-              stockState ? 'text-success' : 'text-destructive',
-            )}
-          >
-            {stockState ? 'In Stock' : 'Out of Stock'}
+        {stockState === false ? (
+          <p aria-live="polite" className="text-xs font-semibold text-destructive">
+            Out of Stock
           </p>
         ) : null}
         {showAdd ? (

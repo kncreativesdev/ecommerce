@@ -245,7 +245,7 @@ export function CategoryForm({ initialValue = null, categories = [], onSubmit, s
         <div className="flex items-center gap-3">
           <span aria-hidden="true" className="inline-flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-muted">
             {shownImageUrl ? (
-              <img src={shownImageUrl} alt="" className="h-full w-full object-cover" />
+              <img src={shownImageUrl} alt="" className="h-full w-full object-contain" />
             ) : (
               <ImagePlus size={22} className="text-muted-foreground" />
             )}

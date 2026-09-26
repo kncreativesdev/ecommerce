@@ -13,6 +13,7 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { PageHeader } from '../components/ui/PageHeader.jsx';
 import { Table } from '../components/ui/Table.jsx';
 import { Modal } from '../components/ui/Modal.jsx';
+import { ProductThumb } from '../components/catalog/ProductThumb.jsx';
 import { Pagination } from '../components/ui/Pagination.jsx';
 import { formatDate, formatINR } from '../lib/format.js';
 import { cn } from '../lib/cn.js';
@@ -292,8 +293,13 @@ export function ProductsPage() {
           {paged.map((product) => (
             <tr key={product.id} className="transition-colors hover:bg-surface-muted/50">
               <td className="px-4 py-3">
-                <p className="font-semibold text-foreground">{product.name}</p>
-                <p className="truncate text-xs text-muted-foreground">/{product.slug}</p>
+                <span className="flex items-center gap-3">
+                  <ProductThumb product={product} />
+                  <span className="min-w-0">
+                    <p className="font-semibold text-foreground">{product.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">/{product.slug}</p>
+                  </span>
+                </span>
               </td>
               <td className="px-4 py-3 text-muted-foreground">{categoryNameFor(product)}</td>
               <td className="px-4 py-3 font-semibold tabular-nums text-foreground">{priceFor(product)}</td>

@@ -149,7 +149,7 @@ export function OrderItemThumb({ item }) {
       src={url}
       alt=""
       loading="lazy"
-      className="h-14 w-14 shrink-0 rounded-xl border border-border bg-surface-muted object-cover"
+      className="h-14 w-14 shrink-0 rounded-xl border border-border bg-surface-muted object-contain"
     />
   );
 }

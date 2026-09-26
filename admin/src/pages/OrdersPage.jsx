@@ -14,6 +14,7 @@ import { Table } from '../components/ui/Table.jsx';
 import { Modal } from '../components/ui/Modal.jsx';
 import { Pagination } from '../components/ui/Pagination.jsx';
 import { OrderStatusBadge, PaymentMethodBadge, PaymentStatusBadge } from '../components/orders/OrderBadges.jsx';
+import { OrderItemThumb } from '../components/orders/OrderItemThumb.jsx';
 import { formatDate, formatINR } from '../lib/format.js';
 import { cn } from '../lib/cn.js';
 
@@ -24,10 +25,11 @@ import { cn } from '../lib/cn.js';
  * (`status/paymentStatus/search/from/to/sortOrder`); the store refetches
  * on each change. No invented params, no client-side slicing.
  *
- * Columns show server-returned fields only: order number, customer
- * (brief), item count, server grand total, order/payment status, payment
- * method, placement date. Row action is a View link to `/orders/:id`
- * (rows are never pseudo-buttons).
+ * Columns show server-returned fields only: order number + first item's
+ * immutable image snapshot, customer name + immutable SHIPPING address
+ * snapshot line (email stays on the detail page), item count, server
+ * grand total, order/payment status, payment method, placement date.
+ * Row action is a View link to `/orders/:id` (rows are never pseudo-buttons).
  */
 const ORDER_COLUMNS = [
   { key: 'select', label: 'Select' },
@@ -45,6 +47,45 @@ const selectClass =
   'min-h-[44px] cursor-pointer rounded-lg border border-input bg-surface px-3 text-sm text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
 const dateInputClass =
   'min-h-[44px] rounded-lg border border-input bg-surface px-3 text-sm text-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
+
+/**
+ * Immutable SHIPPING address snapshot for the row (never the customer's
+ * current address book — later edits must not rewrite history). One-line
+ * compact form; the full address stays on the order detail page.
+ */
+function shippingAddressLine(order) {
+  const addresses = Array.isArray(order?.addresses) ? order.addresses : [];
+  const shipping =
+    addresses.find((address) => address?.type === 'SHIPPING') ?? addresses[0] ?? null;
+  if (!shipping) return '—';
+  const parts = [
+    shipping.addressLine1,
+    shipping.addressLine2,
+    [shipping.city, shipping.state].filter(Boolean).join(', ') || null,
+    shipping.postalCode,
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' · ') : '—';
+}
+
+/**
+ * Compact order-item visual: first item's immutable image snapshot plus a
+ * count badge when the order holds more products. Never consults live
+ * product media (history must stay historical).
+ */
+function OrderRowVisual({ order }) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const first = items[0] ?? null;
+  return (
+    <span className="flex items-center gap-2">
+      <OrderItemThumb imageStoragePath={first?.imageStoragePath ?? null} label={`Order ${order?.orderNumber ?? ''}`} />
+      {items.length > 1 ? (
+        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-bold tabular-nums text-muted-foreground">
+          +{items.length - 1}
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 export function OrdersPage() {
   const orders = useOrderStore((state) => state.orders);
@@ -487,12 +528,19 @@ export function OrdersPage() {
                     />
                   </td>
                   <td className="px-4 py-3">
-                    <p className="font-semibold text-foreground">{order.orderNumber}</p>
-                    <p className="truncate text-xs text-muted-foreground">{orderItemCount(order)} items</p>
+                    <span className="flex items-center gap-3">
+                      <OrderRowVisual order={order} />
+                      <span className="min-w-0">
+                        <p className="font-semibold text-foreground">{order.orderNumber}</p>
+                        <p className="truncate text-xs text-muted-foreground">{orderItemCount(order)} items</p>
+                      </span>
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     <p className="font-medium text-foreground">{customerDisplayName(order.customer)}</p>
-                    <p className="truncate text-xs text-muted-foreground">{order.customer?.email ?? '—'}</p>
+                    <p className="max-w-56 truncate text-xs text-muted-foreground" title={shippingAddressLine(order)}>
+                      {shippingAddressLine(order)}
+                    </p>
                   </td>
                   <td className="px-4 py-3 tabular-nums text-muted-foreground">{orderItemCount(order)}</td>
                   <td className="px-4 py-3 font-semibold tabular-nums text-foreground">{formatINR(order.grandTotal)}</td>

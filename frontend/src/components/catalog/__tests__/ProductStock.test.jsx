@@ -42,17 +42,22 @@ beforeEach(() => {
   useCartStore.setState({ bulkPending: false, addItem: vi.fn() });
 });
 
-describe('ProductCard stock visibility', () => {
-  it('shows In Stock for available variants', () => {
+describe('ProductCard stock visibility (cards only)', () => {
+  it('does NOT render a positive "In Stock" status on product cards', () => {
     renderCard(productWithStock(true));
-    expect(screen.getByText('In Stock')).toBeInTheDocument();
-    expect(screen.queryByText('Out of Stock')).not.toBeInTheDocument();
+    expect(screen.queryByText('In Stock')).not.toBeInTheDocument();
   });
 
-  it('shows Out of Stock for unavailable variants', () => {
+  it('still shows "Out of Stock" for unavailable variants', () => {
     renderCard(productWithStock(false));
     expect(screen.getByText('Out of Stock')).toBeInTheDocument();
-    expect(screen.queryByText('In Stock')).not.toBeInTheDocument();
+  });
+
+  it('keeps a constrained two-line title area so cards stay equal-height', () => {
+    const { container } = renderCard(productWithStock(true));
+    const title = container.querySelector('h3');
+    expect(title).not.toBeNull();
+    expect(title.className).toMatch(/line-clamp-2/);
   });
 });
 

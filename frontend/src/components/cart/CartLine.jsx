@@ -40,9 +40,9 @@ export function CartLine({ line, pending, unavailable = false, onSetQuantity, on
 
   return (
     <li className="flex gap-4 rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="h-24 w-24 shrink-0 overflow-hidden rounded-xl">
+      <div className="h-24 w-24 shrink-0 overflow-hidden rounded-xl bg-surface-muted">
         {snapshotUrl ? (
-          <img src={snapshotUrl} alt={line?.image?.altText || title} loading="lazy" className="h-full w-full object-cover" />
+          <img src={snapshotUrl} alt={line?.image?.altText || title} loading="lazy" className="h-full w-full object-contain" />
         ) : productId ? (
           <ProductImage productId={productId} variantId={line?.variantId ?? line?.variant?.id ?? null} alt={title} />
         ) : (

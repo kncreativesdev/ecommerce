@@ -255,7 +255,7 @@ export function VariantMediaSection({ productId, variants = [] }) {
                       return (
                         <li key={image.id} className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-2">
                           {url ? (
-                            <img src={url} alt={image.altText || variant.name} loading="lazy" className="aspect-square w-full rounded-md border border-border object-cover" />
+                            <img src={url} alt={image.altText || variant.name} loading="lazy" className="aspect-square w-full rounded-md border border-border bg-surface-muted object-contain" />
                           ) : (
                             <span aria-hidden="true" className="inline-flex aspect-square w-full items-center justify-center rounded-md bg-surface-muted text-muted-foreground">
                               <ImageIcon size={22} />

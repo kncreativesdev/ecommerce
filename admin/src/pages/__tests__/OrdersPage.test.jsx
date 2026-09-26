@@ -97,3 +97,63 @@ describe('OrdersPage completed filter', () => {
     expect(screen.getByRole('button', { name: 'Completed' })).toHaveAttribute('aria-pressed', 'false');
   });
 });
+
+describe('OrdersPage row visuals (snapshot data only)', () => {
+  function snapshotFixture() {
+    return orderFixture({
+      items: [
+        { id: 'li-1', quantity: 2, imageStoragePath: 'order-items/snap-1.webp' },
+        { id: 'li-2', quantity: 1, imageStoragePath: null },
+      ],
+      addresses: [
+        {
+          id: 'addr-1',
+          type: 'SHIPPING',
+          fullName: 'Buy Er',
+          phone: '9999999999',
+          addressLine1: '1 Sea Face',
+          addressLine2: null,
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          postalCode: '400001',
+          country: 'India',
+        },
+      ],
+    });
+  }
+
+  it('shows the immutable shipping snapshot under the customer name instead of the email', async () => {
+    fetchOrdersAdmin.mockResolvedValue({
+      orders: [snapshotFixture()],
+      pagination: { page: 1, limit: ORDER_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderOrders();
+    expect(await screen.findByText('ORD-2026-000001')).toBeInTheDocument();
+    expect(screen.getByText('Buy Er')).toBeInTheDocument();
+    expect(screen.queryByText('buyer@example.test')).not.toBeInTheDocument();
+    expect(screen.getByText(/1 Sea Face.*Mumbai.*Maharashtra.*400001/)).toBeInTheDocument();
+  });
+
+  it('renders the order-item image snapshot with a count for multi-item orders', async () => {
+    fetchOrdersAdmin.mockResolvedValue({
+      orders: [snapshotFixture()],
+      pagination: { page: 1, limit: ORDER_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    const { container } = renderOrders();
+    await screen.findByText('ORD-2026-000001');
+    const img = container.querySelector('img[src*="order-items/snap-1.webp"]');
+    expect(img).not.toBeNull();
+    expect(screen.getByText('+1')).toBeInTheDocument();
+  });
+
+  it('falls back gracefully when snapshot image/address data is missing', async () => {
+    fetchOrdersAdmin.mockResolvedValue({
+      orders: [orderFixture()],
+      pagination: { page: 1, limit: ORDER_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderOrders();
+    await screen.findByText('ORD-2026-000001');
+    expect(screen.getByLabelText('No image snapshot for Order ORD-2026-000001')).toBeInTheDocument();
+    expect(screen.getByText('—')).toBeInTheDocument();
+  });
+});

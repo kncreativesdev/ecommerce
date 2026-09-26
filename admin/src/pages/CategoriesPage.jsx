@@ -11,6 +11,7 @@ import { EmptyState } from '../components/ui/EmptyState.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Modal } from '../components/ui/Modal.jsx';
 import { CategoryForm } from '../components/catalog/CategoryForm.jsx';
+import { CategoryThumb } from '../components/catalog/CategoryThumb.jsx';
 import { cn } from '../lib/cn.js';
 
 /**
@@ -331,6 +332,7 @@ function CategoryRow({ category, depth, activatingId, onEdit, onDeactivate, onAc
         )}
         style={depth > 0 ? { paddingLeft: `${1 + depth * 1.25}rem` } : undefined}
       >
+        <CategoryThumb image={category.image} />
         <div className="min-w-0 flex-1">
           <p className={cn('truncate text-sm', depth === 0 ? 'font-bold text-foreground' : 'font-medium text-foreground')}>
             {category.name}
