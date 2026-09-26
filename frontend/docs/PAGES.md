@@ -193,8 +193,9 @@ contracts). Catalog filtering/sorting/search is client-side over the
 
 ## 16. Checkout — `/checkout` (PROTECTED)
 
-- **Purpose**: place COD order. Prereqs: non-empty cart + ≥1 address
-  (redirect to cart / addresses with messaging otherwise).
+- **Purpose**: place COD order. Prereqs: non-empty cart (redirect to cart
+  with messaging otherwise); zero saved addresses renders the address form
+  inline (no redirect — the saved record is immediately selected).
 - **Sections** (vertical stepper): 1) shipping address picker + inline
   create, 2) billing (same-as-shipping default or second picker), 3) review
   lines + COD summary (server totals only, fixed "Cash on Delivery" method),

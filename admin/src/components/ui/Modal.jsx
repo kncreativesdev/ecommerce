@@ -5,24 +5,39 @@ import { cn } from '../../lib/cn.js';
 /**
  * Accessible modal dialog: Escape closes, backdrop click closes (unless
  * `persistent` during pending mutations), labelled by `title`. Focus moves
- * to the dialog on open; body scroll locks while mounted.
+ * to the dialog once on open; body scroll locks while mounted.
+ *
+ * The open/scroll/Escape setup runs exactly once per mount. It must NOT
+ * depend on `onClose`: every call site passes an inline closure (a new
+ * identity per render), so depending on it re-ran this effect — including
+ * `dialog.focus()` — on every keystroke inside the dialog and yanked focus
+ * out of form inputs. Latest values are read through refs instead.
  */
 export function Modal({ title, onClose, persistent = false, className, children }) {
   const dialogRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  const persistentRef = useRef(persistent);
+
+  // Latest-callback refs (synced post-commit, never during render): the
+  // Escape handler below needs fresh values without re-subscribing.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    persistentRef.current = persistent;
+  });
 
   useEffect(() => {
     dialogRef.current?.focus();
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape' && !persistent) onClose();
+      if (event.key === 'Escape' && !persistentRef.current) onCloseRef.current();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.body.style.overflow = previous;
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [onClose, persistent]);
+  }, []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-6">

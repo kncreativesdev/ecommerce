@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { setAuthHandler } from '../lib/apiClient.js';
+import { isSessionInvalidError, setAuthHandler, sharedRefresh } from '../lib/apiClient.js';
 import { resetGuestSync, syncGuestAfterAuth } from '../lib/guestSync.js';
 import {
   fetchCurrentUser,
@@ -11,6 +11,8 @@ import {
 import { useCartStore } from './useCartStore.js';
 import { useWishlistStore } from './useWishlistStore.js';
 import { useCheckoutStore } from './useCheckoutStore.js';
+import { useNotificationsStore } from './useNotificationsStore.js';
+import { useAnnouncementStore } from './useAnnouncementStore.js';
 
 /**
  * Customer session state (Zustand) — FRONTEND_ARCHITECTURE.md §5.
@@ -20,8 +22,12 @@ import { useCheckoutStore } from './useCheckoutStore.js';
  *   browser-managed.
  * - `status`: `idle` (never bootstrapped) | `loading` (session resolving) |
  *   `ready` (settled — authenticated or not).
- * - `bootstrap()`: one silent refresh attempt on app boot, then
- *   `GET /auth/me`. Without a valid cookie the user stays logged out.
+ * - `bootstrap()`: one coordinated silent-refresh attempt on app boot
+ *   (shared single-flight with concurrent 401s), then `GET /auth/me`.
+ *   Definitive rejection (`401`/`403` + `AUTH_*`) settles anonymous;
+ *   transient failure (`429`/`5xx`/network) settles `error` — recoverable
+ *   via retry, never a false logout, never a cookie destroy. Without a
+ *   valid cookie the user stays logged out (no login flash, no error toast).
  * - `login()` / `registerThenLogin()` establish the session and return
  *   `{ ok }`; `logout()` always succeeds locally and clears all mirrors.
  * - `refreshAccessToken()` backs `apiClient`'s single-flight 401 flow
@@ -58,6 +64,11 @@ export const useAuthStore = create((set, get) => ({
     useCartStore.getState().reset();
     useWishlistStore.getState().reset();
     useCheckoutStore.getState().reset();
+    // Notification/announcement mirrors are per-user too: without this the
+    // next login flashes the previous user's items/unread badge until the
+    // bell refetches. Both stores refetch from scratch on demand.
+    useNotificationsStore.getState().reset();
+    useAnnouncementStore.getState().reset();
   },
 
   login: async ({ email, password }) => {
@@ -116,27 +127,44 @@ export const useAuthStore = create((set, get) => ({
   bootstrap: async () => {
     if (get().status === 'loading' || get().status === 'ready') return;
     set({ status: 'loading', lastError: null });
+    let accessToken;
     try {
-      // One silent refresh attempt; without a cookie this 401s and the
-      // user stays logged out (no login flash, no error toast).
-      const accessToken = await refreshRequest();
-      if (!accessToken) {
-        set({ status: 'ready' });
+      // Shared single-flight with the 401 flow: bootstrap plus the page's
+      // data requests resolve through ONE `/auth/refresh` hit, never two
+      // racing refreshes per hard reload.
+      accessToken = await sharedRefresh();
+    } catch (error) {
+      if (isSessionInvalidError(error)) {
+        // Definitive: the refresh credential is unusable → anonymous.
+        set({ accessToken: null, user: null, status: 'ready', lastError: null });
+      } else {
+        // Transient (429/5xx/network): recoverable bootstrap failure. The
+        // HttpOnly cookie is untouched — guards must offer retry, never a
+        // login redirect, and must NOT clear session mirrors.
+        set({ status: 'error', lastError: error });
+      }
+      return;
+    }
+    if (!accessToken) {
+      set({ accessToken: null, user: null, status: 'ready', lastError: null });
+      return;
+    }
+    set({ accessToken });
+    try {
+      const user = await fetchCurrentUser();
+      if (!user) {
+        set({ accessToken: null, user: null, status: 'ready', lastError: null });
         return;
       }
-      set({ accessToken });
-      try {
-        const user = await fetchCurrentUser();
-        if (!user) {
-          set({ accessToken: null, status: 'ready' });
-          return;
-        }
-        await get().setSession(accessToken, user);
-      } catch {
-        set({ accessToken: null, user: null, status: 'ready' });
+      await get().setSession(accessToken, user);
+    } catch (error) {
+      if (isSessionInvalidError(error)) {
+        set({ accessToken: null, user: null, status: 'ready', lastError: null });
+      } else {
+        // Token restored but identity fetch failed transiently: keep the
+        // token so a retry resumes without another refresh attempt.
+        set({ status: 'error', lastError: error });
       }
-    } catch {
-      set({ accessToken: null, user: null, status: 'ready' });
     }
   },
 }));

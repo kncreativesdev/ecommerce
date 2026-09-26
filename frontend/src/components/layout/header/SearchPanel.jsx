@@ -12,8 +12,8 @@ import { cn } from '../../../lib/cn.js';
 /**
  * Expandable full-width search panel below the navbar (dark in both themes).
  * Mounted only while open, so query state is fresh on every open. Local
- * query state only — submit navigates to `/search?q=…` via React Router.
- * Escape or outside click closes.
+ * query state only — submit navigates to the canonical `/shop?q=…` listing
+ * via React Router. Escape or outside click closes.
  *
  * Search-as-you-type suggestions come from the real catalog cache
  * (`GET /products` via `useProducts`, shared with the rest of the
@@ -21,7 +21,7 @@ import { cn } from '../../../lib/cn.js';
  * `getSearchSuggestions` (no backend search endpoint exists —
  * API_INTEGRATION §7 / GAP-04). Product rows navigate to
  * `/product/:id`, category rows to `/category/:id`, and the trailing row
- * (or Enter with no highlight) to `/search?q=…`. The URL query stays the
+ * (or Enter with no highlight) to `/shop?q=…`. The URL query stays the
  * source of truth for the results page.
  */
 export function SearchPanel({ categories = [], onClose }) {
@@ -96,7 +96,7 @@ export function SearchPanel({ categories = [], onClose }) {
     const text = value.trim();
     if (text) params.set('q', text);
     onClose();
-    navigate(`/search${params.toString() ? `?${params.toString()}` : ''}`);
+    navigate(`/shop${params.toString() ? `?${params.toString()}` : ''}`);
   };
 
   const selectRow = (row) => {

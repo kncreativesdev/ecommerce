@@ -55,6 +55,7 @@ function detailFixture() {
     ],
     addresses: [],
     payments: [{ id: 'pay-9', method: 'CASH_ON_DELIVERY', status: 'PAID', amount: '320.00' }],
+    statusHistory: [],
     customer: { id: 'u9', email: 'buyer@example.test', firstName: 'Buy', lastName: 'Er', phone: null },
     createdAt: '2026-09-01T00:00:00.000Z',
     updatedAt: '2026-09-03T00:00:00.000Z',

@@ -10,11 +10,12 @@ import { ProductCard } from '../components/catalog/ProductCard.jsx';
 import { ProductGallery } from '../components/catalog/ProductGallery.jsx';
 import { WishlistButton } from '../components/catalog/WishlistButton.jsx';
 import { useProducts } from '../hooks/useProducts.js';
-import { getActiveVariants, getDefaultVariant, getRelatedProducts } from '../utils/productAdapter.js';
+import { getActiveVariants, getDefaultVariant, getRelatedProducts, getVariantStockState } from '../utils/productAdapter.js';
 import { useCartStore } from '../stores/useCartStore.js';
 import { useAuthStore } from '../stores/useAuthStore.js';
-import { fetchMyReviews } from '../services/reviews.service.js';
-import { formatINR } from '../lib/format.js';
+import { fetchMyReviews, fetchProductReviews } from '../services/reviews.service.js';
+import { RatingStars } from '../components/reviews/ReviewCard.jsx';
+import { formatDate, formatINR } from '../lib/format.js';
 import { cn } from '../lib/cn.js';
 
 /**
@@ -47,6 +48,19 @@ export function ProductDetailPage() {
   // = unknown/loading, `null` = none or unavailable; failures stay silent
   // so the hint can never break the page.
   const [ownReview, setOwnReview] = useState(undefined);
+  // Public approved reviews for the PDP (`GET /reviews/product/:productId`,
+  // backend truth — never fake). `null` = loading, `[]` = none (empty
+  // state), array = approved reviews newest-first.
+  const [productReviews, setProductReviews] = useState(null);
+  const [reviewsError, setReviewsError] = useState(null);
+  // Reset to loading on product change via render-time adjustment (not
+  // setState-in-effect); the fetch effect below only resolves async.
+  const [prevReviewProductId, setPrevReviewProductId] = useState(product?.id ?? null);
+  if ((product?.id ?? null) !== prevReviewProductId) {
+    setPrevReviewProductId(product?.id ?? null);
+    setProductReviews(null);
+    setReviewsError(null);
+  }
 
   useEffect(() => {
     if (!isAuthenticated || !product) return;
@@ -65,6 +79,26 @@ export function ProductDetailPage() {
       cancelled = true;
     };
   }, [isAuthenticated, product]);
+
+  useEffect(() => {
+    if (!product) return;
+    let cancelled = false;
+    fetchProductReviews(product.id)
+      .then((list) => {
+        if (cancelled) return;
+        setProductReviews(Array.isArray(list) ? list : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setProductReviews([]);
+        setReviewsError(error);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Fetch on product-id change only; resets run render-time above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id]);
 
   useEffect(() => {
     if (id && !product) {
@@ -126,10 +160,19 @@ export function ProductDetailPage() {
   const variants = getActiveVariants(product);
   const selected = variants.find((variant) => variant.id === selectedVariantId) ?? getDefaultVariant(product);
   const related = getRelatedProducts(products, product, 4);
+  // Variant-specific availability from backend inventory truth (selected
+  // variant — never the whole product as one bucket).
+  const stockState = getVariantStockState(selected);
 
   const handleAdd = async ({ buyNow = false } = {}) => {
     if (!selected) {
       toast.error('This product has no purchasable variant right now.');
+      return;
+    }
+    // A valid selected variant is required (existing rule) and UX
+    // out-of-stock protection — backend still enforces (409).
+    if (stockState === false) {
+      toast.error('This product is out of stock.');
       return;
     }
     const result = await addItem({
@@ -146,7 +189,8 @@ export function ProductDetailPage() {
     });
     if (!result.ok) {
       if (result.error?.code === 'INSUFFICIENT_STOCK' || result.error?.status === 409) {
-        toast.error('Not enough stock for that quantity right now.');
+        // Stale UI state (said in-stock, backend says unavailable).
+        toast.error('This product is out of stock right now.');
       } else if (result.error?.code === 'PRODUCT_VARIANT_INACTIVE' || result.error?.status === 422) {
         toast.error('This variant is no longer available.');
       } else {
@@ -212,6 +256,17 @@ export function ProductDetailPage() {
           ) : (
             <p className="text-sm text-muted-foreground">Price unavailable</p>
           )}
+          {stockState !== null ? (
+            <p
+              aria-live="polite"
+              className={cn(
+                'text-sm font-semibold',
+                stockState ? 'text-success' : 'text-destructive',
+              )}
+            >
+              {stockState ? 'In Stock' : 'Out of Stock'}
+            </p>
+          ) : null}
 
           {variants.length > 1 ? (
             <fieldset>
@@ -336,6 +391,50 @@ export function ProductDetailPage() {
           </Link>
         </section>
       ) : null}
+
+      <section aria-label="Customer reviews" className="mt-10 max-w-3xl">
+        <h2 className="mb-3 text-xl font-semibold tracking-tight">Customer reviews</h2>
+        {productReviews === null ? (
+          <p role="status" className="text-sm text-muted-foreground">Loading reviews…</p>
+        ) : reviewsError ? (
+          <p role="alert" className="text-sm text-muted-foreground">
+            Couldn’t load reviews right now. Please try again later.
+          </p>
+        ) : productReviews.length === 0 ? (
+          <p className="rounded-2xl border border-border bg-card p-5 text-sm leading-6 text-muted-foreground">
+            No reviews yet — be the first to review this product after purchase.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {productReviews.map((review) => (
+              <li
+                key={review.id}
+                className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-5 shadow-sm"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <RatingStars rating={review.rating ?? 0} />
+                  {review.createdAt ? (
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {formatDate(review.createdAt)}
+                    </span>
+                  ) : null}
+                </div>
+                {review.author ? (
+                  <p className="text-[13px] font-semibold text-muted-foreground">{review.author}</p>
+                ) : null}
+                {review.title ? (
+                  <p className="text-sm font-bold text-foreground">{review.title}</p>
+                ) : null}
+                {review.comment ? (
+                  <p className="whitespace-pre-line text-sm leading-6 text-muted-foreground">
+                    {review.comment}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* Sticky mobile purchase bar (price + add), clear of toasts/floats. */}
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface-elevated/95 px-4 py-3 backdrop-blur lg:hidden">

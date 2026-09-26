@@ -14,6 +14,9 @@ import { env } from '../config/env.js';
  * - `401` → single-flight `POST /auth/refresh` (cookie, `credentials:
  *   "include"`, no body) → retry original once → else `onUnauthorized()`
  *   (store clears the session; route guard redirects to login). Never loops.
+ *   Only an explicit auth rejection (`401`/`403` + `AUTH_*` code) ends the
+ *   session — throttled (`429`), failed (`5xx`), or unreachable (network)
+ *   refreshes propagate as transient errors WITHOUT signing out.
  *
  * Backend authorization remains authoritative; frontend guards are UX
  * layering only.
@@ -71,6 +74,22 @@ function toApiError(response, payload) {
     message: error.message ?? 'Request failed.',
     details: Array.isArray(payload?.details) ? payload.details : [],
   });
+}
+
+/**
+ * A refresh failure proves the session is dead ONLY when the backend
+ * explicitly rejected the refresh credential (`401`/`403` with an `AUTH_`
+ * code, e.g. `AUTH_REFRESH_TOKEN_INVALID`). Transient failures — rate
+ * limiting (`429 RATE_LIMIT_EXCEEDED`), `5xx`, network errors (`status 0`)
+ * — must NOT clear the session: the refresh cookie may still be valid and
+ * the next attempt can succeed. Logging out on a transient turns a brief
+ * throttle/blip into a full session loss (and a retry storm that burns the
+ * login budget into `429 Too Many Requests`).
+ */
+export function isSessionInvalidError(error) {
+  if (!(error instanceof ApiError)) return false;
+  if (error.status !== 401 && error.status !== 403) return false;
+  return typeof error.code === 'string' && error.code.startsWith('AUTH_');
 }
 
 async function doFetch(path, { method = 'GET', body, formData = false, headers, credentials } = {}) {
@@ -146,11 +165,19 @@ export async function apiGetPage(path, options = {}) {
 }
 
 async function doRequest(path, options = {}) {
-  const { retried, ...fetchOptions } = options;
+  const { retried, skipAuthRefresh, ...fetchOptions } = options;
   const response = await doFetch(path, fetchOptions);
   const payload = await parsePayload(response);
 
   if (response.status !== 401) {
+    return { response, payload };
+  }
+
+  // `skipAuthRefresh` marks auth-endpoint calls themselves (login/logout):
+  // a 401 there is a credential outcome, never a rotation signal. Without
+  // this guard a bad-password login would burn a refresh and the retried
+  // 401 would wrongly clear a still-valid session.
+  if (skipAuthRefresh) {
     return { response, payload };
   }
 
@@ -162,9 +189,16 @@ async function doRequest(path, options = {}) {
   try {
     const accessToken = await refreshAccessToken();
     tokenSink?.(accessToken);
-  } catch {
-    authHandler.onUnauthorized();
-    return { response, payload };
+  } catch (refreshError) {
+    // Only an explicit auth rejection ends the session. A throttled
+    // (429), failed (5xx), or unreachable (network) refresh keeps the
+    // session: surface the transient so the UI can retry instead of
+    // signing the admin out and hammering `/auth/login` into 429.
+    if (isSessionInvalidError(refreshError)) {
+      authHandler.onUnauthorized();
+      return { response, payload };
+    }
+    throw refreshError;
   }
   return doRequest(path, { ...fetchOptions, retried: true });
 }

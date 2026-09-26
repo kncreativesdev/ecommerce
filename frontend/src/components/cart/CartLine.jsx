@@ -25,6 +25,14 @@ export function CartLine({ line, pending, unavailable = false, onSetQuantity, on
   const title = line?.product?.name ?? 'Product';
   const notAvailable = unavailable || line?.unavailable === true;
   const decrementDisabled = pending || notAvailable || line.quantity <= 1;
+  // Backend inventory truth per cart line (authenticated lines carry
+  // server `inStock`; guest lines resolve it from the live catalog).
+  const stockState =
+    line?.inStock !== undefined
+      ? Boolean(line.inStock)
+      : line?.variant?.inStock !== undefined
+        ? Boolean(line.variant.inStock)
+        : null;
   const snapshotUrl = resolveImageUrl(
     line?.image?.storagePath ? { storagePath: line.image.storagePath } : null,
     env.mediaBaseUrl,
@@ -76,6 +84,18 @@ export function CartLine({ line, pending, unavailable = false, onSetQuantity, on
         <p className="text-xs tabular-nums text-muted-foreground">
           {line.unitPrice !== null && line.unitPrice !== undefined ? `${formatINR(line.unitPrice)} each` : 'Price unavailable'}
         </p>
+
+        {stockState !== null && !notAvailable ? (
+          <p
+            aria-live="polite"
+            className={cn(
+              'text-xs font-semibold',
+              stockState ? 'text-success' : 'text-destructive',
+            )}
+          >
+            {stockState ? 'In Stock' : 'Out of Stock'}
+          </p>
+        ) : null}
 
         {notAvailable ? (
           <p role="note" className="mt-auto rounded-lg bg-surface-muted px-3 py-2 text-xs leading-5 text-muted-foreground">

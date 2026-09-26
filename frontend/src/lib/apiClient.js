@@ -11,7 +11,9 @@ import { env } from '../config/env.js';
  * - Error envelope: `{ success: false, error: { code, message }, details? }`
  *   → throw typed `ApiError { status, code, message, details }`.
  * - `401` handling: single-flight silent refresh → retry original once →
- *   else clear session. Never loops, never logs tokens.
+ *   else clear session. Never loops, never logs tokens. Only an explicit
+ *   auth rejection (`401`/`403` + `AUTH_*`) clears the session — `429`,
+ *   `5xx`, and network failures propagate WITHOUT signing out.
  *
  * The auth store wires itself via `setAuthHandler` (dependency inversion —
  * this module never imports the store, so no import cycle exists).
@@ -75,6 +77,23 @@ function toApiError(response, payload) {
   });
 }
 
+/**
+ * A refresh failure proves the session is dead ONLY when the backend
+ * explicitly rejected the refresh credential (`401`/`403` with an `AUTH_`
+ * code, e.g. `AUTH_REFRESH_TOKEN_INVALID`). Transient failures — rate
+ * limiting (`429 RATE_LIMIT_EXCEEDED`), `5xx`, network errors (`status 0`)
+ * — must NOT clear the session: the refresh cookie may still be valid and
+ * the next attempt can succeed. Clearing on a transient turns a brief
+ * throttle/blip into a full session loss (wiping cart/wishlist/checkout
+ * mirrors and redirecting to login, then hammering `/auth/login` into
+ * `429 Too Many Requests`).
+ */
+export function isSessionInvalidError(error) {
+  if (!(error instanceof ApiError)) return false;
+  if (error.status !== 401 && error.status !== 403) return false;
+  return typeof error.code === 'string' && error.code.startsWith('AUTH_');
+}
+
 async function doFetch(path, { method = 'GET', body, headers, credentials } = {}) {
   const base = env.apiUrl;
   if (!base) {
@@ -107,6 +126,18 @@ function refreshOnce() {
   return refreshInflight;
 }
 
+/**
+ * Shared single-flight entry point for non-401 callers — notably auth
+ * bootstrap. A hard reload fires bootstrap plus data requests
+ * concurrently; if bootstrap used its own raw refresh call, the page would
+ * emit (at least) two `/auth/refresh` hits per load and burn the refresh
+ * + global rate budgets twice as fast. Sharing one promise keeps it at
+ * exactly one coordinated refresh per page context.
+ */
+export function sharedRefresh() {
+  return refreshOnce();
+}
+
 export async function apiRequest(path, options = {}) {
   // `skipAuthRefresh` marks the refresh call itself: a 401 there must
   // throw immediately. Without this guard the 401-handler would invoke
@@ -131,9 +162,16 @@ export async function apiRequest(path, options = {}) {
   }
   try {
     await refreshOnce();
-  } catch {
-    authHandler.onAuthFailure();
-    throw toApiError(response, payload);
+  } catch (refreshError) {
+    // Only an explicit auth rejection ends the session. A throttled
+    // (429), failed (5xx), or unreachable (network) refresh keeps the
+    // session: surface the transient so the UI can retry instead of
+    // clearing cart/wishlist/checkout mirrors and redirecting to login.
+    if (isSessionInvalidError(refreshError)) {
+      authHandler.onAuthFailure();
+      throw toApiError(response, payload);
+    }
+    throw refreshError;
   }
   return apiRequest(path, { ...fetchOptions, retried: true });
 }

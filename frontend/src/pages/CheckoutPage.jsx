@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Banknote, Check, MapPin, Plus } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Banknote, Check, Plus } from 'lucide-react';
 import { Container } from '../components/ui/Container.jsx';
 import { Breadcrumbs } from '../components/layout/Breadcrumbs.jsx';
 import { EmptyState } from '../components/ui/EmptyState.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/Skeleton.jsx';
 import { ProductImage } from '../components/catalog/ProductImage.jsx';
+import { AddressForm } from '../components/addresses/AddressForm.jsx';
 import { CouponSection } from '../components/checkout/CouponSection.jsx';
 import { useCartStore } from '../stores/useCartStore.js';
 import { useCheckoutStore } from '../stores/useCheckoutStore.js';
@@ -22,10 +23,13 @@ import { cn } from '../lib/cn.js';
  * picker), 3) review lines + COD summary (server totals only, fixed "Cash
  * on Delivery" method), 4) Place Order (single submit, double-submit guard).
  *
- * Prereqs: non-empty cart (else cart with messaging), ≥1 address (else
- * addresses page with messaging). `POST /orders` sends address ids ONLY.
- * `201` → reset checkout state → `/order-confirmation/:id` (never from
- * local state). Failures route per PAGES.md §16.
+ * Prereqs: non-empty cart (else cart with messaging). A first-time customer
+ * with no saved address gets the address form inline (no navigation away);
+ * returning customers pick from saved cards (default preselected) and can
+ * add another address inline without leaving checkout. `POST /orders` sends
+ * address ids ONLY. `201` → reset checkout state →
+ * `/order-confirmation/:id` (never from local state). Failures route per
+ * PAGES.md §16.
  */
 export function CheckoutPage() {
   const navigate = useNavigate();
@@ -49,13 +53,16 @@ export function CheckoutPage() {
   const [addressStatus, setAddressStatus] = useState('loading');
   const [addressError, setAddressError] = useState(null);
   const [addressReloadToken, setAddressReloadToken] = useState(0);
+  const [showAddressForm, setShowAddressForm] = useState(false);
+  const [addressMutating, setAddressMutating] = useState(false);
 
   useEffect(() => {
     document.title = 'Checkout — Tech Pulse';
     bootstrapCart();
   }, [bootstrapCart]);
 
-  // Address loading (state updates only in async continuations).
+  // Address loading (state updates only in async continuations). One fetch
+  // per mount/retry — the list feeds both pickers from local state.
   useEffect(() => {
     const controller = new AbortController();
     const signal = controller.signal;
@@ -64,10 +71,23 @@ export function CheckoutPage() {
         if (signal.aborted) return;
         setAddresses(data);
         setAddressStatus('success');
+        const store = useCheckoutStore.getState();
+        const ids = new Set(data.map((address) => address.id));
         const preferred = data.find((address) => address.isDefault) ?? data[0] ?? null;
-        if (preferred) {
-          const store = useCheckoutStore.getState();
-          if (!store.shippingAddressId) store.setShippingAddressId(preferred.id);
+        if (!preferred) {
+          // Address book emptied elsewhere: drop stale picks so the inline
+          // form (not a dead selection) drives the next order.
+          if (store.shippingAddressId) store.setShippingAddressId(null);
+          if (store.billingAddressId) store.setBillingAddressId(null);
+          return;
+        }
+        // Default (else first) is preselected; a stored pick survives only
+        // if it still exists (e.g. not deleted from the account page).
+        if (!store.shippingAddressId || !ids.has(store.shippingAddressId)) {
+          store.setShippingAddressId(preferred.id);
+        }
+        if (!store.billingSameAsShipping && store.billingAddressId && !ids.has(store.billingAddressId)) {
+          store.setBillingAddressId(preferred.id);
         }
       })
       .catch((error) => {
@@ -77,6 +97,24 @@ export function CheckoutPage() {
       });
     return () => controller.abort();
   }, [addressReloadToken]);
+
+  // A newly saved address joins the list and becomes the shipping pick —
+  // no navigation, no reload; the customer continues checkout immediately.
+  const handleAddressSaved = async (saved) => {
+    setShowAddressForm(false);
+    try {
+      const data = await fetchAddresses();
+      setAddresses(data);
+      setAddressStatus('success');
+      const pick = (saved?.id && data.some((address) => address.id === saved.id))
+        ? saved.id
+        : (data.find((address) => address.isDefault) ?? data[0] ?? null)?.id ?? null;
+      if (pick) useCheckoutStore.getState().setShippingAddressId(pick);
+    } catch (error) {
+      setAddressError(error);
+      setAddressStatus('error');
+    }
+  };
 
   const cartLoading = cartStatus === 'idle' || cartStatus === 'loading';
   const addressLoading = addressStatus === 'loading';
@@ -120,7 +158,7 @@ export function CheckoutPage() {
       if (typeof error?.code === 'string' && error.code.startsWith('COUPON_')) {
         toast.error(error?.message ?? 'Coupon could not be applied to this order.');
       } else if (error?.code === 'ORDER_INSUFFICIENT_STOCK' || error?.status === 409) {
-        toast.error('Some items ran short — back to cart to review.');
+        toast.error('Some items are out of stock — back to cart to review.');
         await bootstrapCart();
         navigate('/cart');
       } else if (error?.code === 'ORDER_EMPTY_CART' || error?.status === 422) {
@@ -175,14 +213,23 @@ export function CheckoutPage() {
   }
 
   if (addresses.length === 0) {
+    // First order (or emptied book): the address form lives HERE — the
+    // customer types once, saves to the server book, and continues. The
+    // saved record is immediately selected; future orders reuse it.
     return (
-      <Container className="py-10 sm:py-14">
-        <EmptyState
-          icon={MapPin}
-          title="Add a delivery address first"
-          message="Checkout needs at least one saved address."
-          actionTo="/account/addresses"
-          actionLabel="Manage addresses"
+      <Container className="flex max-w-3xl flex-col gap-6 py-10 sm:py-14">
+        <Breadcrumbs items={[{ label: 'Home', to: '/' }, { label: 'Cart', to: '/cart' }, { label: 'Checkout' }]} />
+        <h1 className="text-2xl font-bold tracking-tight">Checkout</h1>
+        <p className="-mt-3 text-sm text-muted-foreground">
+          Add a delivery address to continue — it will be saved for your next orders.
+        </p>
+        <AddressForm
+          key="checkout-new"
+          initialValue={null}
+          mutating={addressMutating}
+          setMutating={setAddressMutating}
+          onSaved={handleAddressSaved}
+          onCancel={() => setAddressReloadToken((token) => token + 1)}
         />
       </Container>
     );
@@ -253,13 +300,25 @@ export function CheckoutPage() {
               </li>
             ))}
           </ul>
-          <Link
-            to="/account/addresses"
-            className="inline-flex min-h-[44px] items-center gap-1.5 self-start rounded-lg px-2 text-sm font-semibold text-accent-link hover:no-underline"
-          >
-            <Plus size={15} aria-hidden="true" />
-            Add a new address
-          </Link>
+          {showAddressForm ? (
+            <AddressForm
+              key="checkout-additional"
+              initialValue={null}
+              mutating={addressMutating}
+              setMutating={setAddressMutating}
+              onSaved={handleAddressSaved}
+              onCancel={() => setShowAddressForm(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowAddressForm(true)}
+              className="inline-flex min-h-[44px] items-center gap-1.5 self-start rounded-lg px-2 text-sm font-semibold text-accent-link hover:no-underline"
+            >
+              <Plus size={15} aria-hidden="true" />
+              Add a new address
+            </button>
+          )}
           <div className="flex justify-end">
             <button
               type="button"

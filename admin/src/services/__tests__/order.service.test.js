@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiGetPage } from '../../lib/apiClient.js';
-import { fetchOrdersAdmin } from '../order.service.js';
+import { apiGetPage, apiPatch } from '../../lib/apiClient.js';
+import { fetchOrdersAdmin, updateOrderStatus } from '../order.service.js';
 
 vi.mock('../../lib/apiClient.js', () => ({
   apiGet: vi.fn(),
@@ -36,5 +36,35 @@ describe('order.service list (meta regression)', () => {
     const result = await fetchOrdersAdmin({});
 
     expect(result.pagination).toEqual({ page: 1, limit: 20, total: 0, totalPages: 1 });
+  });
+});
+
+describe('order.service status mutation (note support)', () => {
+  it('sends status only when no note is given', async () => {
+    apiPatch.mockResolvedValue({ order: { id: 'o1', status: 'CONFIRMED' } });
+
+    const result = await updateOrderStatus('o1', 'CONFIRMED');
+
+    expect(apiPatch).toHaveBeenCalledWith('/orders/admin/o1/status', { status: 'CONFIRMED' });
+    expect(result).toEqual({ id: 'o1', status: 'CONFIRMED' });
+  });
+
+  it('attaches a non-empty note to the status payload', async () => {
+    apiPatch.mockResolvedValue({ order: { id: 'o1', status: 'CONFIRMED' } });
+
+    await updateOrderStatus('o1', 'CONFIRMED', 'Verified by phone.');
+
+    expect(apiPatch).toHaveBeenCalledWith('/orders/admin/o1/status', {
+      status: 'CONFIRMED',
+      note: 'Verified by phone.',
+    });
+  });
+
+  it('omits blank notes instead of sending empty strings', async () => {
+    apiPatch.mockResolvedValue({ order: { id: 'o1', status: 'CONFIRMED' } });
+
+    await updateOrderStatus('o1', 'CONFIRMED', '   ');
+
+    expect(apiPatch).toHaveBeenCalledWith('/orders/admin/o1/status', { status: 'CONFIRMED' });
   });
 });

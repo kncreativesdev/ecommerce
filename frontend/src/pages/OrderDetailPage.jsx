@@ -14,6 +14,7 @@ import {
   OrderTotals,
   PaymentSnapshot,
 } from '../components/orders/OrderBits.jsx';
+import { OrderTimeline } from '../components/orders/OrderTimeline.jsx';
 import { ReviewForm } from '../components/reviews/ReviewForm.jsx';
 import { fetchOrderById } from '../services/orders.service.js';
 import { createReview, fetchMyReviews } from '../services/reviews.service.js';
@@ -140,6 +141,8 @@ export function OrderDetailPage() {
             </div>
             <OrderStatusBadge status={order.status} />
           </div>
+
+          <OrderTimeline order={order} />
 
           <section aria-label="Order items" className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 shadow-sm">
             <h2 className="text-base font-bold text-foreground">Items</h2>

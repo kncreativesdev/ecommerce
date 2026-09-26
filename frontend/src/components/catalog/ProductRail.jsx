@@ -67,7 +67,8 @@ export function ProductRail({ id, title, subtitle, viewAllTo, viewAllLabel = 'Vi
       </div>
       <ul
         ref={trackRef}
-        className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0"
+        data-testid="product-rail-track"
+        className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0 tp-no-scrollbar"
       >
         {products.map((product) => (
           <li

@@ -11,6 +11,7 @@ import {
   customerDisplayName,
   latestPayment,
   orderItemCount,
+  orderStatusLabel,
 } from '../utils/orderLifecycle.js';
 import { Button } from '../components/ui/Button.jsx';
 import { EmptyState } from '../components/ui/EmptyState.jsx';
@@ -19,6 +20,7 @@ import { PageHeader } from '../components/ui/PageHeader.jsx';
 import { Table } from '../components/ui/Table.jsx';
 import { Modal } from '../components/ui/Modal.jsx';
 import { OrderStatusBadge, PaymentMethodBadge, PaymentStatusBadge } from '../components/orders/OrderBadges.jsx';
+import { OrderTimeline } from '../components/orders/OrderTimeline.jsx';
 import { formatDateTime, formatINR } from '../lib/format.js';
 import { cn } from '../lib/cn.js';
 
@@ -36,8 +38,10 @@ import { cn } from '../lib/cn.js';
  * Cancellation is `PATCH …/status { CANCELLED }` (no separate endpoint,
  * no frontend inventory writes: the backend restores stock + ledger
  * atomically). Payment controls mutate status only (no gateway).
- * History beyond `createdAt`/`updatedAt` does not exist server-side and
- * is not invented here.
+ * Status history renders the authoritative `statusHistory[]` ledger
+ * (oldest-first); legacy orders with `[]` show a fallback and no rows
+ * are ever invented. An optional note (≤500 chars) rides with each
+ * status mutation.
  */
 const ITEM_COLUMNS = [
   { key: 'image', label: 'Image' },
@@ -114,6 +118,7 @@ export function OrderDetailPage() {
 
   const [pendingAction, setPendingAction] = useState(null);
   const [confirm, setConfirm] = useState(null); // { kind: 'status' | 'payment', next }
+  const [statusNote, setStatusNote] = useState('');
 
   useEffect(() => {
     document.title = 'Order — Tech Pulse Admin';
@@ -136,12 +141,13 @@ export function OrderDetailPage() {
     if (!detail?.id || pendingAction) return;
     setPendingAction(`status:${next}`);
     try {
-      const record = await updateOrderStatus(detail.id, next);
+      const record = await updateOrderStatus(detail.id, next, statusNote);
       syncOrder(record);
+      setStatusNote('');
       if (next === 'CANCELLED') {
         toast.success(`Order ${detail.orderNumber} cancelled — stock restored.`);
       } else {
-        toast.success(`Order ${detail.orderNumber} moved to ${next}.`);
+        toast.success(`Order ${detail.orderNumber} moved to ${orderStatusLabel(next)}.`);
       }
     } catch (mutationError) {
       toast.error(mutationError?.message ?? 'Status update failed. Please try again.');
@@ -169,7 +175,9 @@ export function OrderDetailPage() {
   };
 
   const requestTransition = (kind, next) => {
-    const needsConfirm = (kind === 'status' && next === 'CANCELLED') || (kind === 'payment' && next === 'REFUNDED');
+    const needsConfirm =
+      (kind === 'status' && (next === 'CANCELLED' || next === 'DELIVERED' || next === 'COMPLETED')) ||
+      (kind === 'payment' && next === 'REFUNDED');
     if (needsConfirm) {
       setConfirm({ kind, next });
       return;
@@ -230,34 +238,53 @@ export function OrderDetailPage() {
           <div className="grid gap-4 lg:grid-cols-2">
             <Section title="Order status">
               <p className="text-sm text-muted-foreground">
-                Current status: <span className="font-semibold text-foreground">{detail.status}</span>
+                Current status:{' '}
+                <span className="font-semibold text-foreground">{orderStatusLabel(detail.status)}</span>
               </p>
               {orderTransitions.length === 0 ? (
                 <p className="mt-2 text-sm text-muted-foreground">
-                  {detail.status} is terminal — this order cannot move to another state.
+                  {orderStatusLabel(detail.status)} is terminal — this order cannot move to another state.
                 </p>
               ) : (
-                <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Advance order status">
-                  {orderTransitions.map((next) => {
-                    const actionKey = `status:${next}`;
-                    const isDestructive = next === 'CANCELLED';
-                    return (
-                      <Button
-                        key={next}
-                        variant={isDestructive ? 'destructive' : 'secondary'}
-                        size="sm"
-                        loading={pendingAction === actionKey}
-                        disabled={pendingAction !== null}
-                        onClick={() => requestTransition('status', next)}
-                        aria-label={isDestructive ? `Cancel order ${detail.orderNumber}` : `Move order to ${next}`}
-                      >
-                        {isDestructive ? 'Cancel order' : `Mark ${next.charAt(0) + next.slice(1).toLowerCase()}`}
-                      </Button>
-                    );
-                  })}
-                </div>
+                <>
+                  <div className="mt-3">
+                    <label htmlFor="order-status-note" className="text-xs font-semibold text-muted-foreground">
+                      Status note (optional, max 500 characters)
+                    </label>
+                    <textarea
+                      id="order-status-note"
+                      value={statusNote}
+                      maxLength={500}
+                      rows={2}
+                      disabled={pendingAction !== null}
+                      onChange={(event) => setStatusNote(event.target.value)}
+                      placeholder="Add a note recorded with the next status change…"
+                      className="mt-1 min-h-[64px] w-full rounded-lg border border-input bg-surface px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <p className="mt-1 text-xs tabular-nums text-muted-foreground">{statusNote.length}/500</p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Advance order status">
+                    {orderTransitions.map((next) => {
+                      const actionKey = `status:${next}`;
+                      const isDestructive = next === 'CANCELLED';
+                      return (
+                        <Button
+                          key={next}
+                          variant={isDestructive ? 'destructive' : 'secondary'}
+                          size="sm"
+                          loading={pendingAction === actionKey}
+                          disabled={pendingAction !== null}
+                          onClick={() => requestTransition('status', next)}
+                          aria-label={isDestructive ? `Cancel order ${detail.orderNumber}` : `Move order to ${orderStatusLabel(next)}`}
+                        >
+                          {isDestructive ? 'Cancel order' : `Mark ${orderStatusLabel(next)}`}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </>
               )}
-              {detail.status !== 'CANCELLED' && detail.status !== 'DELIVERED' ? (
+              {orderTransitions.includes('CANCELLED') ? (
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">
                   Cancelling restores the ordered quantities to inventory; the payment record is left untouched.
                 </p>
@@ -308,6 +335,13 @@ export function OrderDetailPage() {
               )}
             </Section>
           </div>
+
+          <Section title="Status history">
+            <OrderTimeline order={detail} />
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              Authoritative backend history — every entry was recorded server-side with its timestamp.
+            </p>
+          </Section>
 
           <Section title="Customer">
             <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
@@ -388,7 +422,7 @@ export function OrderDetailPage() {
               </div>
             </dl>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Per-order status history is not stored by the backend — only the current state and timestamps above are authoritative.
+              Status changes are recorded in the authoritative status history above; timestamps are server-side.
             </p>
           </Section>
         </>
@@ -396,17 +430,40 @@ export function OrderDetailPage() {
 
       {confirm ? (
         <Modal
-          title={confirm.kind === 'status' ? `Cancel order ${detail?.orderNumber}?` : `Mark payment refunded?`}
+          title={
+            confirm.kind === 'payment'
+              ? 'Mark payment refunded?'
+              : confirm.next === 'CANCELLED'
+                ? `Cancel order ${detail?.orderNumber}?`
+                : `Mark order ${orderStatusLabel(confirm.next)}?`
+          }
           onClose={() => pendingAction === null && setConfirm(null)}
           persistent={pendingAction !== null}
         >
           {confirm.kind === 'status' ? (
-            <p className="text-sm leading-6 text-muted-foreground">
-              Order <span className="font-semibold text-foreground">{detail?.orderNumber}</span> is currently{' '}
-              <span className="font-semibold text-foreground">{detail?.status}</span>. Cancelling restores{' '}
-              {orderItemCount(detail)} ordered units to inventory via the backend ledger. The payment record is
-              left untouched. This cannot be undone.
-            </p>
+            confirm.next === 'CANCELLED' ? (
+              <p className="text-sm leading-6 text-muted-foreground">
+                Order <span className="font-semibold text-foreground">{detail?.orderNumber}</span> is currently{' '}
+                <span className="font-semibold text-foreground">{orderStatusLabel(detail?.status)}</span>. Cancelling
+                restores {orderItemCount(detail)} ordered units to inventory via the backend ledger. The payment
+                record is left untouched. This cannot be undone.
+              </p>
+            ) : (
+              <p className="text-sm leading-6 text-muted-foreground">
+                Move order <span className="font-semibold text-foreground">{detail?.orderNumber}</span> from{' '}
+                <span className="font-semibold text-foreground">{orderStatusLabel(detail?.status)}</span> to{' '}
+                <span className="font-semibold text-foreground">{orderStatusLabel(confirm.next)}</span>? The
+                backend records this step in the authoritative status history
+                {statusNote.trim() !== '' ? (
+                  <>
+                    {' '}with the note: <span className="font-medium text-foreground">“{statusNote.trim()}”</span>
+                  </>
+                ) : (
+                  ' — no note will be attached'
+                )}
+                .
+              </p>
+            )
           ) : (
             <p className="text-sm leading-6 text-muted-foreground">
               This records a manual refund of <span className="font-semibold text-foreground">{formatINR(payment?.amount)}</span>{' '}
@@ -419,11 +476,15 @@ export function OrderDetailPage() {
               Keep as is
             </Button>
             <Button
-              variant="destructive"
+              variant={confirm.kind === 'status' && confirm.next !== 'CANCELLED' ? 'primary' : 'destructive'}
               loading={pendingAction !== null}
               onClick={() => (confirm.kind === 'status' ? runStatusMutation(confirm.next) : runPaymentMutation(confirm.next))}
             >
-              {confirm.kind === 'status' ? 'Yes, cancel order' : 'Yes, mark refunded'}
+              {confirm.kind === 'status'
+                ? confirm.next === 'CANCELLED'
+                  ? 'Yes, cancel order'
+                  : `Yes, mark ${orderStatusLabel(confirm.next).toLowerCase()}`
+                : 'Yes, mark refunded'}
             </Button>
           </div>
         </Modal>

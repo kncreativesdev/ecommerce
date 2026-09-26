@@ -14,6 +14,8 @@ import { CustomerDetailPage } from '../pages/CustomerDetailPage.jsx';
 import { ReviewsPage } from '../pages/ReviewsPage.jsx';
 import { InventoryPage } from '../pages/InventoryPage.jsx';
 import { CouponsPage } from '../pages/CouponsPage.jsx';
+import { MarketingNotificationsPage } from '../pages/MarketingNotificationsPage.jsx';
+import { AnnouncementsPage } from '../pages/AnnouncementsPage.jsx';
 import { CouponNewPage } from '../pages/CouponNewPage.jsx';
 import { CouponEditPage } from '../pages/CouponEditPage.jsx';
 import { NotFoundPage } from '../pages/NotFoundPage.jsx';
@@ -46,6 +48,8 @@ export const router = createBrowserRouter([
           { path: '/catalog/coupons', element: <CouponsPage /> },
           { path: '/catalog/coupons/new', element: <CouponNewPage /> },
           { path: '/catalog/coupons/:id/edit', element: <CouponEditPage /> },
+          { path: '/marketing/notifications', element: <MarketingNotificationsPage /> },
+          { path: '/marketing/announcements', element: <AnnouncementsPage /> },
           { path: '*', element: <NotFoundPage /> },
         ],
       },

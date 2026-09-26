@@ -20,6 +20,7 @@ import {
   getMaxDiscountPercent,
   getPriceBounds,
   paginateProducts,
+  searchProducts,
   sortProducts,
 } from '../utils/productAdapter.js';
 import { findCategory } from '../utils/categoryAdapter.js';
@@ -78,6 +79,8 @@ export function ShopPage() {
   const { taxonomy } = useTaxonomy();
   const { products, status, error, refreshProducts } = useProducts();
 
+  const queryParam = searchParams.get('q') ?? '';
+  const searchQuery = queryParam.trim();
   const categorySlug = searchParams.get('category');
   const subcategorySlug = searchParams.get('subcategory');
   const brand = searchParams.get('brand');
@@ -93,7 +96,9 @@ export function ShopPage() {
     ? category.subcategories.find((sub) => sub.slug === subcategorySlug) ?? null
     : null;
 
-  const title = subcategory?.name ?? category?.name ?? 'Shop';
+  const title = searchQuery
+    ? `Results for “${searchQuery}”`
+    : (subcategory?.name ?? category?.name ?? 'Shop');
 
   useEffect(() => {
     document.title = `${title} — Tech Pulse`;
@@ -117,7 +122,10 @@ export function ShopPage() {
   }
   const discount = parseDiscountParam(discountRaw);
 
-  let visible = [...products];
+  // Canonical listing pipeline: search constrains the catalog first, then
+  // every existing catalog filter refines those results. Removing `q`
+  // returns to normal browsing with no stale search state.
+  let visible = searchQuery ? searchProducts(products, searchQuery) : [...products];
   if (category) visible = filterProductsByCategory(visible, category);
   if (brand) visible = filterProductsByBrand(visible, brand);
   visible = filterProductsByPriceRange(visible, minPrice, maxPrice);
@@ -142,14 +150,25 @@ export function ShopPage() {
     discountRaw,
     searchParams.get('featured'),
     sort,
+    searchQuery ? 'q' : '',
   ].filter((value) => typeof value === 'string' && value !== '').length;
   const hasActiveFilters = activeFilterCount > 0;
+  const hasSearch = searchQuery !== '';
 
   const gridTopRef = useRef(null);
 
   // Mobile filter disclosure (desktop shows the panel unconditionally via
   // `lg:block`; one DOM instance, no duplicated controls).
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // Search draft mirrors the URL `q` so back/forward navigation stays
+  // coherent (URL is the source of truth; the input follows it via the
+  // sanctioned render-time derived-state pattern, not setState-in-effect).
+  const [searchDraft, setSearchDraft] = useState(queryParam);
+  const [prevQueryParam, setPrevQueryParam] = useState(queryParam);
+  if (prevQueryParam !== queryParam) {
+    setPrevQueryParam(queryParam);
+    setSearchDraft(queryParam);
+  }
 
   // Update one facet while preserving every other URL param. Any
   // filter/sort change resets to page 1; page navigation preserves filters.
@@ -166,6 +185,20 @@ export function ShopPage() {
     } else {
       next.delete(key);
     }
+  };
+
+  const submitSearch = (event) => {
+    event?.preventDefault();
+    updateParams((next) => {
+      setParamOrDelete(next, 'q', searchDraft);
+    });
+  };
+
+  const clearSearch = () => {
+    setSearchDraft('');
+    updateParams((next) => {
+      next.delete('q');
+    });
   };
 
   const goToPage = (nextPage) => {
@@ -216,6 +249,53 @@ export function ShopPage() {
           </p>
         ) : null}
       </div>
+
+      <form
+        role="search"
+        onSubmit={submitSearch}
+        className="mb-6 flex w-full max-w-xl items-center gap-2"
+      >
+        <label htmlFor="shop-search" className="sr-only">
+          Search products
+        </label>
+        <input
+          id="shop-search"
+          type="search"
+          value={searchDraft}
+          onChange={(event) => setSearchDraft(event.target.value)}
+          placeholder="Search by name, brand, or keyword…"
+          autoComplete="off"
+          className="h-11 w-full rounded-xl border border-input bg-surface px-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30"
+        />
+        {searchDraft ? (
+          <button
+            type="button"
+            onClick={clearSearch}
+            aria-label="Clear search"
+            className="inline-flex min-h-[44px] shrink-0 cursor-pointer items-center rounded-xl px-3 text-sm font-semibold text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground"
+          >
+            Clear
+          </button>
+        ) : null}
+        <button
+          type="submit"
+          className="inline-flex min-h-[44px] shrink-0 cursor-pointer items-center rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+        >
+          Search
+        </button>
+      </form>
+      {hasSearch ? (
+        <p aria-live="polite" className="mb-4 text-sm text-muted-foreground">
+          Showing results for “{searchQuery}” — filters below further refine these results.{' '}
+          <button
+            type="button"
+            onClick={clearSearch}
+            className="font-semibold text-accent-link hover:no-underline"
+          >
+            Clear search
+          </button>
+        </p>
+      ) : null}
 
       {subcategory ? (
         <p className="mb-6 flex items-start gap-2 rounded-xl border border-border bg-surface-muted px-4 py-3 text-[13px] leading-5 text-muted-foreground">
@@ -331,13 +411,15 @@ export function ShopPage() {
       ) : visible.length === 0 ? (
         <EmptyState
           icon={PackageSearch}
-          title="No products found"
+          title={hasSearch ? `No results for “${searchQuery}”` : 'No products found'}
           message={
-            hasActiveFilters
-              ? 'Nothing matches the current filters. Try widening the price range or clearing filters.'
-              : category
-                ? `Nothing is listed under ${title} right now. Try the full catalog.`
-                : 'The catalog is empty right now. Check back soon.'
+            hasSearch
+              ? 'Try a different keyword, or widen the filters below.'
+              : hasActiveFilters
+                ? 'Nothing matches the current filters. Try widening the price range or clearing filters.'
+                : category
+                  ? `Nothing is listed under ${title} right now. Try the full catalog.`
+                  : 'The catalog is empty right now. Check back soon.'
           }
           actionTo="/shop"
           actionLabel="Clear filters"

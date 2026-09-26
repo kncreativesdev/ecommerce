@@ -49,7 +49,7 @@ export function CartPage() {
     const result = await setQuantity(itemId, quantity);
     if (!result.ok) {
       if (result.error?.code === 'INSUFFICIENT_STOCK' || result.error?.status === 409) {
-        toast.error('Not enough stock for that quantity — cart refreshed.');
+        toast.error('This product is out of stock right now — cart refreshed.');
       } else if (result.error?.code === 'CART_ITEM_NOT_FOUND' || result.error?.status === 404) {
         toast.error('That item is no longer in your cart.');
       } else {

@@ -20,18 +20,22 @@ export function loginRequest({ email, password }) {
   // `credentials: "include"` is REQUIRED so the browser stores the
   // cross-origin `Set-Cookie` refresh token — without it the session works
   // until reload, then the silent-refresh bootstrap 401s and signs out.
+  // `skipAuthRefresh`: a login 401 is a credential outcome, never a signal
+  // to rotate the session — refreshing here would waste budget and a
+  // retried 401 would wrongly clear a still-valid session.
   return apiPost(
     '/auth/login',
     {
       email: email.trim().toLowerCase(),
       password,
     },
-    { credentials: 'include' },
+    { credentials: 'include', skipAuthRefresh: true },
   );
 }
 
 export function logoutRequest() {
-  return apiPost('/auth/logout', undefined, { credentials: 'include' }).catch(() => null);
+  // `skipAuthRefresh`: signing out must never trigger a session rotation.
+  return apiPost('/auth/logout', undefined, { credentials: 'include', skipAuthRefresh: true }).catch(() => null);
 }
 
 export function fetchCurrentUser() {

@@ -193,12 +193,16 @@ placeholder fallback (see API_INTEGRATION § media).
   logout(), refresh(), bootstrap() }`.
 - Token lives in memory only (Zustand, no persistence plugin, nothing in
   localStorage/sessionStorage) per backend recommendation.
-- `bootstrap()`: if no token, stay logged-out (refresh cookie cannot be read
-  by JS; an app reload without a persisted token means logged-out unless a
-  silent `POST /auth/refresh` succeeds — attempt one silent refresh on first
-  load, then `GET /auth/me`). Cart/wishlist bootstrap after auth.
+- `bootstrap()`: one coordinated silent refresh (shared single-flight with
+  concurrent 401s — exactly one `/auth/refresh` per page load), then
+  `GET /auth/me`. Definitive rejection (`401`/`403` + `AUTH_*`) settles
+  anonymous; transient failure (`429`/`5xx`/network) settles `error` —
+  recoverable via retry, never a false logout, never a cookie destroy.
+  Cart/wishlist bootstrap after auth.
 - `useRequireAuth` / `<ProtectedRoute>` read store status; show a loading
-  gate (not a login flash) while `status === "loading"`.
+  gate (not a login flash) while `status === "loading"`, a retry panel
+  while `status === "error"`, and redirect to login only when settled
+  anonymous.
 - Roles: backend always assigns `CUSTOMER` on self-register; the storefront
   gates admin UI by absence (no admin screens). Never trust or send roles.
 

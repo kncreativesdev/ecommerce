@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   BadgePercent,
+  BellRing,
   Boxes,
   FolderTree,
   LayoutDashboard,
   LogOut,
+  Megaphone,
   Menu,
   Moon,
   Package,
@@ -24,7 +26,7 @@ import { cn } from '../../lib/cn.js';
  * Admin shell: compact sidebar + top bar + content area. Desktop-first
  * with a slide-in sidebar below `lg`. Navigation lists ONLY implemented
  * sections (Dashboard, Categories, Products, Coupons, Orders, Inventory,
- * Customers, Reviews) — future sections (Media, Notifications, Settings)
+ * Customers, Reviews) — future sections (Media, Settings)
  * join this config as their milestones land. No fake screens.
  */
 
@@ -50,6 +52,13 @@ const NAV_SECTIONS = [
     items: [
       { to: '/customers', label: 'Customers', icon: Users, end: false },
       { to: '/reviews', label: 'Reviews', icon: Star, end: false },
+    ],
+  },
+  {
+    label: 'Marketing',
+    items: [
+      { to: '/marketing/notifications', label: 'Notifications', icon: Megaphone, end: false },
+      { to: '/marketing/announcements', label: 'Announcements', icon: BellRing, end: false },
     ],
   },
 ];
@@ -150,7 +159,11 @@ export function AdminLayout() {
   };
 
   const sectionTitle =
-    pathname.startsWith('/orders')
+    pathname.startsWith('/marketing/notifications')
+      ? 'Notifications'
+      : pathname.startsWith('/marketing/announcements')
+        ? 'Announcements'
+        : pathname.startsWith('/orders')
       ? 'Orders'
       : pathname.startsWith('/inventory')
         ? 'Inventory'

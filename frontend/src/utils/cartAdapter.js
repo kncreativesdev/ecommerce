@@ -7,12 +7,20 @@
 /** Normalize one cart line (server-computed totals preserved verbatim). */
 export function adaptCartItem(item) {
   if (!item || typeof item !== 'object') return null;
+  // Backend inventory truth (`inStock` boolean on the line/variant).
+  const inStock =
+    item.inStock !== undefined
+      ? Boolean(item.inStock)
+      : item.variant?.inStock !== undefined
+        ? Boolean(item.variant.inStock)
+        : null;
   return {
     id: item.id ?? null,
     variantId: item.variantId ?? null,
     quantity: Number.isInteger(item.quantity) ? item.quantity : 0,
     unitPrice: item.unitPrice ?? null,
     lineTotal: item.lineTotal ?? null,
+    ...(inStock !== null ? { inStock } : {}),
     variant: item.variant
       ? {
           id: item.variant.id ?? null,
@@ -20,6 +28,7 @@ export function adaptCartItem(item) {
           name: item.variant.name ?? '',
           price: item.variant.price ?? null,
           isActive: item.variant.isActive ?? true,
+          ...(inStock !== null ? { inStock } : {}),
         }
       : null,
     product: item.product
@@ -152,6 +161,9 @@ export function resolveGuestCartLine(entry, products) {
   const snapshot = entry.snapshot && typeof entry.snapshot === 'object' ? entry.snapshot : {};
   const { product, variant } = findCatalogVariant(products, entry);
   const live = Boolean(variant && variant.isActive !== false && product && product.isActive !== false);
+  // Guest stock truth comes from the live catalog's backend `inStock`
+  // (same source as authenticated product cards).
+  const inStock = live && variant?.inStock !== undefined ? Boolean(variant.inStock) : null;
 
   const productName = live ? product.name : (snapshot.productName ?? 'Saved item');
   const productSlug = live ? (product.slug ?? '') : (snapshot.productSlug ?? '');
@@ -166,12 +178,14 @@ export function resolveGuestCartLine(entry, products) {
     quantity: entry.quantity,
     unitPrice,
     lineTotal,
+    ...(inStock !== null ? { inStock } : {}),
     variant: {
       id: entry.variantId,
       sku: live ? (variant.sku ?? null) : (snapshot.sku ?? null),
       name: variantName,
       price: unitPrice,
       isActive: live,
+      ...(inStock !== null ? { inStock } : {}),
     },
     product: {
       id: entry.productId ?? product?.id ?? null,

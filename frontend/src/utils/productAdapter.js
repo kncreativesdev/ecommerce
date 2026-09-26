@@ -54,6 +54,9 @@ export function adaptProduct(record) {
           barcode: variant.barcode ?? null,
           weight: variant.weight ?? null,
           isActive: variant.isActive ?? true,
+          // Backend inventory truth: boolean availability per variant.
+          // Absent (legacy/admin payloads) means unknown — never invented.
+          ...(variant.inStock !== undefined ? { inStock: Boolean(variant.inStock) } : {}),
           createdAt: variant.createdAt ?? null,
           updatedAt: variant.updatedAt ?? null,
         }))
@@ -78,6 +81,21 @@ export function getActiveVariants(product) {
 /** Default purchasable variant: first active variant, or `null`. */
 export function getDefaultVariant(product) {
   return getActiveVariants(product)[0] ?? null;
+}
+
+/**
+ * Variant availability from backend inventory truth (`inStock` boolean on
+ * the variant). Returns `true`/`false` when known, `null` when the payload
+ * carries no availability (unknown — never invented as in-stock).
+ */
+export function getVariantStockState(variant) {
+  if (!variant || variant.inStock === undefined) return null;
+  return Boolean(variant.inStock);
+}
+
+/** Product availability via its default purchasable variant (card-level). */
+export function getProductStockState(product) {
+  return getVariantStockState(getDefaultVariant(product));
 }
 
 /** Discount % for one variant, or `null` when no MRP claim exists. */

@@ -319,6 +319,18 @@
   .tp-hero-enter {
     animation: tp-hero-enter 0.5s ease-out both;
   }
+
+  /* Horizontal product rails: keep native scroll (mouse/touch/trackpad)
+     but hide the visible scrollbar. Scoped to product rails only — never
+     a global scrollbar reset. */
+  .tp-no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .tp-no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* Skeleton shimmer (both themes via surface-muted token). */

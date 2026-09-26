@@ -17,7 +17,7 @@ function orderFixture(overrides = {}) {
   return {
     id: 'order-1',
     orderNumber: 'ORD-2026-000001',
-    status: 'DELIVERED',
+    status: 'COMPLETED',
     subtotal: '200.00',
     discountTotal: '0.00',
     shippingTotal: '0.00',
@@ -63,7 +63,7 @@ beforeEach(() => {
 });
 
 describe('OrdersPage completed filter', () => {
-  it('Completed applies the backend DELIVERED terminal status (no invented enum)', async () => {
+  it('Completed applies the backend COMPLETED terminal status (no invented enum)', async () => {
     const user = userEvent.setup();
     fetchOrdersAdmin.mockResolvedValue({
       orders: [orderFixture()],
@@ -75,7 +75,7 @@ describe('OrdersPage completed filter', () => {
     await user.click(screen.getByRole('button', { name: 'Completed' }));
 
     expect(fetchOrdersAdmin).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'DELIVERED' }),
+      expect.objectContaining({ status: 'COMPLETED' }),
     );
     const pressed = screen.getByRole('button', { name: 'Completed' });
     expect(pressed).toHaveAttribute('aria-pressed', 'true');

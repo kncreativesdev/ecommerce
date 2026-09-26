@@ -26,7 +26,10 @@ export function registerRequest({ email, password, firstName, lastName, phone })
     ...(lastName?.trim() ? { lastName: lastName.trim() } : {}),
     ...(phone?.trim() ? { phone: phone.trim() } : {}),
   };
-  return apiPost('/auth/register', body).then((data) => data?.user ?? null);
+  // `skipAuthRefresh`: a 401 here is a credential/validation outcome, never
+  // a signal to rotate the session — refreshing would waste budget and a
+  // retried 401 would wrongly clear a still-valid session.
+  return apiPost('/auth/register', body, { skipAuthRefresh: true }).then((data) => data?.user ?? null);
 }
 
 export function loginRequest({ email, password }) {
@@ -36,7 +39,7 @@ export function loginRequest({ email, password }) {
       email: email.trim().toLowerCase(),
       password,
     },
-    { credentials: 'include' },
+    { credentials: 'include', skipAuthRefresh: true },
   );
 }
 
@@ -51,7 +54,8 @@ export function refreshRequest() {
 
 export function logoutRequest() {
   // Always succeeds locally even if the call fails (store handles it).
-  return apiPost('/auth/logout', undefined, { credentials: 'include' }).catch(() => null);
+  // `skipAuthRefresh`: signing out must never trigger a session rotation.
+  return apiPost('/auth/logout', undefined, { credentials: 'include', skipAuthRefresh: true }).catch(() => null);
 }
 
 export function fetchCurrentUser() {

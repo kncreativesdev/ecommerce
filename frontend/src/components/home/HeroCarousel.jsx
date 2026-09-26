@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Banknote, ChevronLeft, ChevronRight, Headset, ShieldCheck, ShoppingBag, Sparkles } from 'lucide-react';
 import { fetchProductImages, resolveImageUrl } from '../../services/media.service.js';
@@ -119,6 +119,12 @@ export function HeroCarousel({ products = [], isLoading = false }) {
   const [paused, setPaused] = useState(false);
   const [cycle, setCycle] = useState(0);
   const reducedMotion = usePrefersReducedMotion();
+  // Touch swipe origin for finger gestures (clientX/Y of the first touch).
+  // Pointer events are intentionally not used: touch events cover mobile
+  // swipe, mouse users keep the always-visible arrows/dots, and
+  // `touch-pan-y` below lets vertical page scroll pass through while
+  // horizontal swipes change slides.
+  const touchStartRef = useRef(null);
 
   // One image-list request per hero candidate (cached per product id for
   // the component lifetime — no refetch on slide changes or navigation).
@@ -172,6 +178,36 @@ export function HeroCarousel({ products = [], isLoading = false }) {
     if (slides.length <= 1) return;
     setIndex(((next % slides.length) + slides.length) % slides.length);
     setCycle((value) => value + 1);
+  };
+
+  // Finger swipe: horizontal-dominant gestures past a small threshold change
+  // slides; vertical or short gestures are ignored so page scrolling is
+  // never hijacked. Autoplay pauses while the finger is down and resumes
+  // after (goTo restarts the interval window via `cycle`).
+  const handleTouchStart = (event) => {
+    const touch = event.touches?.[0] ?? event.changedTouches?.[0];
+    if (!touch) return;
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    setPaused(true);
+  };
+
+  const handleTouchEnd = (event) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    setPaused(false);
+    if (!start || slides.length <= 1) return;
+    const touch = event.changedTouches?.[0] ?? event.touches?.[0];
+    if (!touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const SWIPE_THRESHOLD_PX = 40;
+    if (Math.abs(dx) < SWIPE_THRESHOLD_PX || Math.abs(dx) <= Math.abs(dy)) return;
+    goTo(activeIndex + (dx < 0 ? 1 : -1));
+  };
+
+  const handleTouchCancel = () => {
+    touchStartRef.current = null;
+    setPaused(false);
   };
 
   // Single autoplay interval: active only for multi-slide heroes while the
@@ -251,7 +287,13 @@ export function HeroCarousel({ products = [], isLoading = false }) {
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
     >
-      <div className="relative">
+      <div
+        className="relative touch-pan-y"
+        data-testid="hero-carousel-viewport"
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
+      >
         <div
           className="relative flex transition-transform duration-500 ease-out motion-reduce:transition-none"
           style={{ transform: `translateX(-${activeIndex * 100}%)` }}
@@ -425,9 +467,9 @@ export function HeroCarousel({ products = [], isLoading = false }) {
           </>
         ) : null}
 
-        {/* Dots: centered pills, red active accent. */}
+        {/* Dots: centered pills, red active accent, spaced from hero content. */}
         {showControls ? (
-          <div className="relative z-10 flex items-center justify-center gap-2 pb-6" role="group" aria-label="Choose slide">
+          <div className="relative z-10 mt-4 flex items-center justify-center gap-2 pb-6" role="group" aria-label="Choose slide">
             {slides.map((slide, slideIndex) => (
               <button
                 key={slide.product.id}

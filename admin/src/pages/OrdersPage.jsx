@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Eye, Search, ShoppingCart, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { useOrderStore } from '../stores/useOrderStore.js';
-import { ORDER_STATUSES, PAYMENT_STATUSES, customerDisplayName, latestPayment, orderItemCount } from '../utils/orderLifecycle.js';
+import { bulkUpdateOrderStatus } from '../services/order.service.js';
+import { ORDER_STATUSES, PAYMENT_STATUSES, allowedOrderTransitions, customerDisplayName, latestPayment, orderItemCount, orderStatusLabel } from '../utils/orderLifecycle.js';
 import { Badge } from '../components/ui/Badge.jsx';
 import { Button } from '../components/ui/Button.jsx';
 import { EmptyState } from '../components/ui/EmptyState.jsx';
@@ -28,6 +30,7 @@ import { cn } from '../lib/cn.js';
  * (rows are never pseudo-buttons).
  */
 const ORDER_COLUMNS = [
+  { key: 'select', label: 'Select' },
   { key: 'order', label: 'Order' },
   { key: 'customer', label: 'Customer' },
   { key: 'items', label: 'Items' },
@@ -54,10 +57,29 @@ export function OrdersPage() {
   const clearFilters = useOrderStore((state) => state.clearFilters);
   const ensureOrders = useOrderStore((state) => state.ensureOrders);
 
-  // Search input is local until submitted (avoids a request per keystroke);
-  // every other control applies immediately via the store (server fetch).
+  // Search/geo drafts mirror URL-backed store filters so external clears
+  // stay coherent. Render-time derived-state (sanctioned pattern, same as
+  // catalog search) — never setState-in-effect.
   const [searchDraft, setSearchDraft] = useState(filters.search ?? '');
+  const [cityDraft, setCityDraft] = useState(filters.city ?? '');
+  const [stateDraft, setStateDraft] = useState(filters.state ?? '');
+  const [prevFilterSignature, setPrevFilterSignature] = useState(
+    `${filters.search ?? ''}|${filters.city ?? ''}|${filters.state ?? ''}`,
+  );
+  const filterSignature = `${filters.search ?? ''}|${filters.city ?? ''}|${filters.state ?? ''}`;
+  if (prevFilterSignature !== filterSignature) {
+    setPrevFilterSignature(filterSignature);
+    setSearchDraft(filters.search ?? '');
+    setCityDraft(filters.city ?? '');
+    setStateDraft(filters.state ?? '');
+  }
   const [searchHelpOpen, setSearchHelpOpen] = useState(false);
+  // Bulk selection: id → status snapshot at selection time (supports
+  // multi-page filtered results; statuses drive valid-transition options).
+  const [selected, setSelected] = useState({});
+  const [bulkStatus, setBulkStatus] = useState('');
+  const [bulkPending, setBulkPending] = useState(false);
+  const [bulkError, setBulkError] = useState(null);
 
   useEffect(() => {
     document.title = 'Orders — Tech Pulse Admin';
@@ -65,19 +87,93 @@ export function OrdersPage() {
   }, [ensureOrders]);
 
   const isLoading = status === 'idle' || status === 'loading';
-  const hasActiveFilters = Boolean(filters.status || filters.paymentStatus || filters.search || filters.from || filters.to);
+  const hasActiveFilters = Boolean(filters.status || filters.paymentStatus || filters.search || filters.city || filters.state || filters.from || filters.to);
 
   const applySearch = () => {
     refreshOrders({ filters: { ...filters, search: searchDraft.trim() } });
   };
 
+  const applyGeo = () => {
+    refreshOrders({ filters: { ...filters, city: cityDraft.trim(), state: stateDraft.trim() } });
+  };
+
   const handleClearAll = () => {
     setSearchDraft('');
+    setCityDraft('');
+    setStateDraft('');
+    setSelected({});
+    setBulkStatus('');
+    setBulkError(null);
     clearFilters();
   };
 
   const handleFilterChange = (patch) => {
     refreshOrders({ filters: { ...filters, ...patch } });
+  };
+
+  const selectedIds = useMemo(() => Object.keys(selected), [selected]);
+  const selectedOrders = useMemo(
+    () => selectedIds.map((id) => ({ id, status: selected[id] })),
+    [selectedIds, selected],
+  );
+  // Only valid transitions, common to EVERY selected order (intersection),
+  // so the bulk target can never offer an illegal move for the set.
+  const commonTransitions = useMemo(() => {
+    if (selectedOrders.length === 0) return [];
+    const sets = selectedOrders.map(({ status: current }) => allowedOrderTransitions(current));
+    return sets[0].filter((candidate) => sets.every((list) => list.includes(candidate)));
+  }, [selectedOrders]);
+
+  const toggleSelect = (order) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[order.id]) delete next[order.id];
+      else next[order.id] = order.status;
+      return next;
+    });
+    setBulkError(null);
+  };
+
+  const toggleSelectAll = () => {
+    const pageIds = orders.map((order) => order.id);
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => selected[id]);
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (allSelected) {
+        for (const id of pageIds) delete next[id];
+      } else {
+        for (const order of orders) next[order.id] = order.status;
+      }
+      return next;
+    });
+    setBulkError(null);
+  };
+
+  const runBulkUpdate = async () => {
+    if (selectedIds.length === 0 || !bulkStatus || bulkPending) return;
+    setBulkPending(true);
+    setBulkError(null);
+    try {
+      // Single combined backend operation (atomic all-or-nothing) — never
+      // a client-side loop of independent status requests.
+      await bulkUpdateOrderStatus(selectedIds, bulkStatus);
+      toast.success(`${selectedIds.length} order${selectedIds.length === 1 ? '' : 's'} moved to ${orderStatusLabel(bulkStatus)}.`);
+      setSelected({});
+      setBulkStatus('');
+      await refreshOrders();
+    } catch (error) {
+      const details = Array.isArray(error?.details) ? error.details : [];
+      const message = details.length > 0
+        ? `${error?.message ?? 'Bulk update failed.'} ${details.map((d) => d.message ?? d.code).join(' ')}`
+        : (error?.message ?? 'Bulk update failed.');
+      setBulkError(message);
+      toast.error(message);
+      // Reconcile with server truth even on failure (atomic → no partial
+      // writes, but refetch guarantees the list mirrors the backend).
+      await refreshOrders();
+    } finally {
+      setBulkPending(false);
+    }
   };
 
   const meta = isLoading
@@ -138,17 +234,19 @@ export function OrdersPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Completed is a UI label for the backend DELIVERED terminal
-                state (no COMPLETED enum exists) — one click away for the
-                fulfilment workflow; the select below stays authoritative. */}
+            {/* Completed is a UI shortcut for the backend COMPLETED terminal
+                state (lifecycle closure after DELIVERED) — one click away
+                for the fulfilment workflow; the select below stays
+                authoritative. Delivered orders remain discoverable via the
+                select; no active-only query is ever applied. */}
             <button
               type="button"
-              onClick={() => handleFilterChange({ status: filters.status === 'DELIVERED' ? '' : 'DELIVERED' })}
-              aria-pressed={filters.status === 'DELIVERED'}
-              title="Show delivered (completed) orders"
+              onClick={() => handleFilterChange({ status: filters.status === 'COMPLETED' ? '' : 'COMPLETED' })}
+              aria-pressed={filters.status === 'COMPLETED'}
+              title="Show completed orders"
               className={cn(
                 'inline-flex min-h-[44px] cursor-pointer items-center rounded-lg border px-3.5 text-sm font-semibold transition-colors',
-                filters.status === 'DELIVERED'
+                filters.status === 'COMPLETED'
                   ? 'border-success bg-success/15 text-success'
                   : 'border-border bg-surface text-muted-foreground hover:text-foreground',
               )}
@@ -167,7 +265,7 @@ export function OrdersPage() {
               <option value="">All order statuses</option>
               {ORDER_STATUSES.map((value) => (
                 <option key={value} value={value}>
-                  {value.charAt(0) + value.slice(1).toLowerCase()}
+                  {orderStatusLabel(value)}
                 </option>
               ))}
             </select>
@@ -228,6 +326,41 @@ export function OrdersPage() {
               <option value="asc">Oldest first</option>
             </select>
 
+            <label htmlFor="order-city-filter" className="sr-only">
+              Filter by city
+            </label>
+            <input
+              id="order-city-filter"
+              type="text"
+              value={cityDraft}
+              onChange={(event) => setCityDraft(event.target.value)}
+              onBlur={applyGeo}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') applyGeo();
+              }}
+              placeholder="City…"
+              autoComplete="off"
+              aria-label="Filter by city"
+              className={selectClass}
+            />
+            <label htmlFor="order-state-filter" className="sr-only">
+              Filter by state
+            </label>
+            <input
+              id="order-state-filter"
+              type="text"
+              value={stateDraft}
+              onChange={(event) => setStateDraft(event.target.value)}
+              onBlur={applyGeo}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') applyGeo();
+              }}
+              placeholder="State…"
+              autoComplete="off"
+              aria-label="Filter by state"
+              className={selectClass}
+            />
+
             {hasActiveFilters ? (
               <button
                 type="button"
@@ -238,6 +371,65 @@ export function OrdersPage() {
               </button>
             ) : null}
           </div>
+          {selectedIds.length > 0 ? (
+            <div
+              aria-live="polite"
+              className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface-muted px-4 py-3"
+            >
+              <span className="text-sm font-semibold text-foreground">
+                {selectedIds.length} order{selectedIds.length === 1 ? '' : 's'} selected
+              </span>
+              {commonTransitions.length > 0 ? (
+                <>
+                  <label htmlFor="bulk-status-select" className="sr-only">
+                    Bulk status target
+                  </label>
+                  <select
+                    id="bulk-status-select"
+                    value={bulkStatus}
+                    onChange={(event) => setBulkStatus(event.target.value)}
+                    className={selectClass}
+                    disabled={bulkPending}
+                  >
+                    <option value="">Choose new status…</option>
+                    {commonTransitions.map((value) => (
+                      <option key={value} value={value}>
+                        {orderStatusLabel(value)}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={runBulkUpdate}
+                    disabled={!bulkStatus || bulkPending}
+                  >
+                    {bulkPending ? 'Updating…' : 'Apply to selected'}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelected({});
+                      setBulkStatus('');
+                      setBulkError(null);
+                    }}
+                    className="inline-flex min-h-[36px] cursor-pointer items-center rounded-lg px-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Clear selection
+                  </button>
+                </>
+              ) : (
+                <span className="text-sm text-muted-foreground">
+                  No common valid transition for this selection — pick orders sharing a next state.
+                </span>
+              )}
+              {bulkError ? (
+                <span role="alert" className="w-full text-sm text-destructive">
+                  {bulkError}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -263,11 +455,37 @@ export function OrdersPage() {
         />
       ) : (
         <>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-sm font-medium text-foreground">
+              <input
+                type="checkbox"
+                checked={orders.length > 0 && orders.every((order) => selected[order.id])}
+                onChange={toggleSelectAll}
+                aria-label="Select all orders on this page"
+                className="h-4 w-4 accent-current"
+              />
+              Select page
+            </label>
+            {selectedIds.length > 0 ? (
+              <span aria-live="polite" className="text-sm text-muted-foreground">
+                {selectedIds.length} selected
+              </span>
+            ) : null}
+          </div>
           <Table caption="Customer orders" columns={ORDER_COLUMNS} minWidth="min-w-[960px]">
             {orders.map((order) => {
               const payment = latestPayment(order);
               return (
                 <tr key={order.id} className="transition-colors hover:bg-surface-muted/50">
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selected[order.id])}
+                      onChange={() => toggleSelect(order)}
+                      aria-label={`Select order ${order.orderNumber}`}
+                      className="h-4 w-4 cursor-pointer accent-current"
+                    />
+                  </td>
                   <td className="px-4 py-3">
                     <p className="font-semibold text-foreground">{order.orderNumber}</p>
                     <p className="truncate text-xs text-muted-foreground">{orderItemCount(order)} items</p>

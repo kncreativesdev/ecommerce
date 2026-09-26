@@ -10,6 +10,7 @@ import { SubcategoryThumb } from './SubcategoryThumb.jsx';
 import { CategoryImage } from '../../catalog/CategoryImage.jsx';
 import { ThemeToggle } from '../ThemeToggle.jsx';
 import { useSession } from '../../../hooks/useSession.js';
+import { useNotificationsStore } from '../../../stores/useNotificationsStore.js';
 import { cn } from '../../../lib/cn.js';
 import { backdropVariants, drawerVariants } from '../../../lib/menuMotion.js';
 
@@ -33,6 +34,9 @@ export function MobileMenu({ categories = [], onClose, onNavigate }) {
   const [expandedCategory, setExpandedCategory] = useState(null);
   const { isAuthenticated, signOut } = useSession();
   const navigate = useNavigate();
+  // Read-only badge mirror (populated by the bell's auth fetch) — this menu
+  // stays presentational and never fetches.
+  const unreadCount = useNotificationsStore((state) => state.unreadCount);
 
   const linkClass =
     'flex min-h-[48px] items-center rounded-xl px-3 text-sm font-medium text-foreground transition-colors duration-200 hover:bg-surface-muted hover:no-underline';
@@ -189,16 +193,26 @@ export function MobileMenu({ categories = [], onClose, onNavigate }) {
           </li>
           {isAuthenticated ? (
             <li
-              aria-label="Notifications — no notifications yet"
+              aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications — no notifications yet'}
               className="flex min-h-[48px] items-center rounded-xl px-3"
             >
               <Bell size={18} aria-hidden="true" className="mr-3 shrink-0 text-muted-foreground" />
-              <span className="flex min-w-0 flex-col">
+              <span className="flex min-w-0 flex-1 flex-col">
                 <span className="text-sm font-medium text-foreground">Notifications</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  No notifications yet — order updates will appear here.
+                  {unreadCount > 0
+                    ? `${unreadCount} unread update${unreadCount === 1 ? '' : 's'} — order updates will appear here.`
+                    : 'No notifications yet — order updates will appear here.'}
                 </span>
               </span>
+              {unreadCount > 0 ? (
+                <span
+                  aria-hidden="true"
+                  className="ml-2 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1.5 text-[11px] font-bold leading-5 text-accent-foreground"
+                >
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              ) : null}
             </li>
           ) : null}
           <li className="mt-1 border-t border-border pt-2">

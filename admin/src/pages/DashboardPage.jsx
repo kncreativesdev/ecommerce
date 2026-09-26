@@ -30,9 +30,9 @@ import { cn } from '../lib/cn.js';
  * ANALYTICS (range-aware): one ADMIN-only `GET /dashboard/summary?range=`
  * per range/mount/refresh. Every number is database-computed; the admin
  * never sums order rows. Recognized revenue = SUM(grandTotal) over
- * DELIVERED orders whose latest payment is PAID (cancelled, in-flight,
- * unpaid, failed, and refunded orders excluded — see the revenue note
- * below and `dashboard.service.js`). Ranges are UTC day boundaries
+ * DELIVERED or COMPLETED orders whose latest payment is PAID (cancelled,
+ * in-flight, unpaid, failed, and refunded orders excluded — see the
+ * revenue note below and `dashboard.service.js`). Ranges are UTC day boundaries
  * computed server-side (week starts Monday); the admin sends only the
  * range enum, so boundaries can never drift. Buckets are zero-filled by
  * the backend across the full frame — zeros are measured absence, and
@@ -211,9 +211,9 @@ export function DashboardPage() {
           linkLabel: 'Open orders',
         },
         {
-          title: 'Delivered',
-          stat: formatCount(summary.orders?.delivered),
-          description: 'Completed fulfilment (all-time)',
+          title: 'Completed',
+          stat: formatCount(summary.period?.completed ?? 0),
+          description: `Completed in this ${range} · ${formatCount(summary.orders?.completed)} all-time completed`,
           to: '/orders',
           linkLabel: 'Open orders',
         },
@@ -396,9 +396,9 @@ export function DashboardPage() {
           <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
             <h3 className="text-sm font-bold text-foreground">What “recognized revenue” means</h3>
             <p className="mt-1 text-[13px] leading-6 text-muted-foreground">
-              SUM of order grand totals over DELIVERED orders whose latest payment is PAID
+              SUM of order grand totals over DELIVERED or COMPLETED orders whose latest payment is PAID
               (cash collected on Cash on Delivery). Cancelled orders, in-flight orders
-              (pending → shipped), and unpaid, failed, or refunded payments are excluded.
+              (pending → out for delivery), and unpaid, failed, or refunded payments are excluded.
               Attributed to order creation time (UTC). Refunds are recorded states, not
               payouts — a refunded order simply stops counting.
             </p>

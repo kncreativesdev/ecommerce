@@ -89,7 +89,7 @@ describe('DashboardPage analytics', () => {
     // Recognized period revenue formatted as INR — never a raw sum.
     expect(await screen.findByText('₹4,321.09')).toBeInTheDocument();
     expect(screen.getByText('Pending · today')).toBeInTheDocument();
-    expect(screen.getByText('Delivered · today')).toBeInTheDocument();
+    expect(screen.getByText('Completed · today')).toBeInTheDocument();
     // Charts render exactly the backend buckets (3 bars × 2 charts).
     expect(container.querySelectorAll('svg[role="img"]')).toHaveLength(2);
     expect(container.querySelectorAll('svg rect')).toHaveLength(6);
@@ -222,12 +222,12 @@ describe('DashboardPage ranges and authoritative metrics', () => {
     expect(screen.getAllByText(/Monthly · calendar year/).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders authoritative order counts (total, pending, delivered) from backend fields', async () => {
+  it('renders authoritative order counts (total, pending, completed) from backend fields', async () => {
     fetchDashboardSummary.mockResolvedValue(
       summaryFixture({
-        orders: { total: 10, pending: 3, confirmed: 1, processing: 1, shipped: 1, delivered: 3, cancelled: 1 },
+        orders: { total: 10, pending: 3, confirmed: 1, processing: 1, dispatched: 1, inTransit: 0, arrivedInCity: 0, outForDelivery: 0, delivered: 2, completed: 8, cancelled: 1 },
         revenue: { total: '9000.00' },
-        period: { orders: 4, revenue: '4321.09' },
+        period: { orders: 4, revenue: '4321.09', completed: 1 },
       }),
     );
     mockOps({ recentOrders: [{ id: 'o9', orderNumber: 'ORD-2026-000009', grandTotal: '100.00', createdAt: '2026-09-19T10:00:00.000Z' }] });
@@ -238,11 +238,14 @@ describe('DashboardPage ranges and authoritative metrics', () => {
     expect(screen.getByText(/10 total received/)).toBeInTheDocument();
     // All-time recognized revenue from revenue.total.
     expect(screen.getByText(/₹9,000.00 all-time recognized/)).toBeInTheDocument();
-    // Pending + delivered hero cards carry the exact server counts.
+    // Pending hero card carries the exact server count (current snapshot).
     const pendingCard = screen.getByText('Pending · today').closest('div');
     expect(within(pendingCard).getByText('3')).toBeInTheDocument();
-    const deliveredCard = screen.getByText('Delivered · today').closest('div');
-    expect(within(deliveredCard).getByText('3')).toBeInTheDocument();
+    // Completed hero card uses backend period truth (completed in range),
+    // never all-time masquerading as today: period.completed=1, all-time=8.
+    const completedCard = screen.getByText('Completed · today').closest('div');
+    expect(within(completedCard).getByText('1')).toBeInTheDocument();
+    expect(within(completedCard).getByText(/8 all-time completed/)).toBeInTheDocument();
     // Selected-period metrics: period orders + period revenue.
     expect(screen.getByText(/4 received in this today/)).toBeInTheDocument();
   });

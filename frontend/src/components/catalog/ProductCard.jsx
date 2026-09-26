@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { PriceBlock } from './PriceBlock.jsx';
 import { ProductImage } from './ProductImage.jsx';
 import { WishlistButton } from './WishlistButton.jsx';
-import { getBestDiscountPercent, getDefaultVariant } from '../../utils/productAdapter.js';
+import { getBestDiscountPercent, getDefaultVariant, getVariantStockState } from '../../utils/productAdapter.js';
 import { useCartStore } from '../../stores/useCartStore.js';
 import { cn } from '../../lib/cn.js';
 
@@ -31,12 +31,20 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
   if (!product) return null;
   const variant = getDefaultVariant(product);
   const discount = getBestDiscountPercent(product);
+  // Variant-specific availability from backend inventory truth. Cards use
+  // the default purchasable variant (the unit quick-add buys).
+  const stockState = getVariantStockState(variant);
 
   const handleAdd = async (event) => {
     event.preventDefault();
     event.stopPropagation();
     if (!variant) {
       toast.error('This product has no purchasable variant right now.');
+      return;
+    }
+    // UX protection only — the backend still enforces inventory (409).
+    if (stockState === false) {
+      toast.error('This product is out of stock.');
       return;
     }
     const result = await addItem({
@@ -54,7 +62,9 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
     if (result.ok) {
       toast.success(`${product.name} added to cart.`);
     } else if (result.error?.code === 'INSUFFICIENT_STOCK' || result.error?.status === 409) {
-      toast.error('Not enough stock for this item right now.');
+      // Stale frontend state: the UI said in-stock but the backend rejects
+      // (stock became unavailable) — surface as an out-of-stock toast.
+      toast.error('This product is out of stock right now.');
     } else if (result.error?.code === 'PRODUCT_VARIANT_INACTIVE' || result.error?.status === 422) {
       toast.error('This variant is no longer available.');
     } else {
@@ -116,6 +126,17 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
             <p className="text-sm text-muted-foreground">Price unavailable</p>
           )}
         </div>
+        {stockState !== null ? (
+          <p
+            aria-live="polite"
+            className={cn(
+              'text-xs font-semibold',
+              stockState ? 'text-success' : 'text-destructive',
+            )}
+          >
+            {stockState ? 'In Stock' : 'Out of Stock'}
+          </p>
+        ) : null}
         {showAdd ? (
           <button
             type="button"

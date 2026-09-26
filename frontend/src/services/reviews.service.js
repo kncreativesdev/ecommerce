@@ -6,10 +6,12 @@ import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/apiClient.js';
  * - `POST /reviews { orderItemId, rating 1–5, title?, comment? }` → `201`.
  *   `productId` is derived server-side — never sent. `409` on repeats.
  * - `GET /reviews/me` → own reviews, newest first.
+ * - `GET /reviews/product/:productId` → public approved reviews for the
+ *   PDP (no auth): `{ id, productId, rating, title, comment, author,
+ *   createdAt }[]`. No private customer data.
  * - `GET /reviews/:id` → owner-scoped single review.
  * - `PATCH /reviews/:id` → non-empty subset of `{ rating, title, comment }`.
  * - `DELETE /reviews/:id` → hard delete. Repeat → `404`.
- * No public product-review listing exists — no aggregate widgets.
  */
 function cleanReviewFields({ rating, title, comment }) {
   const body = {};
@@ -27,6 +29,15 @@ export function createReview({ orderItemId, rating, title, comment }) {
 
 export function fetchMyReviews() {
   return apiGet('/reviews/me').then((data) => {
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.reviews)) return data.reviews;
+    return [];
+  });
+}
+
+export function fetchProductReviews(productId) {
+  if (!productId) return Promise.resolve([]);
+  return apiGet(`/reviews/product/${productId}`).then((data) => {
     if (Array.isArray(data)) return data;
     if (Array.isArray(data?.reviews)) return data.reviews;
     return [];

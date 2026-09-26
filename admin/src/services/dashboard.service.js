@@ -12,11 +12,14 @@ import { apiGet } from '../lib/apiClient.js';
  * frontend-summed):
  * - `range, periodStart, periodEnd, generatedAt` (ISO UTC),
  *   `granularity` (`hour|day|month`).
- * - `orders { total, pending, confirmed, processing, shipped, delivered,
- *   cancelled }` — all-time status counts (every received order).
+ * - `orders { total, pending, confirmed, processing, dispatched (includes
+ *   legacy SHIPPED), inTransit, arrivedInCity, outForDelivery, delivered,
+ *   completed, cancelled }` — all-time status counts (every received
+ *   order). No `shipped` key exists (legacy rows merge into `dispatched`).
  * - `revenue { total }` — all-time RECOGNIZED revenue: SUM(grandTotal)
- *   over DELIVERED orders whose latest payment is PAID. Cancelled,
- *   in-flight, unpaid, failed, and refunded orders are excluded.
+ *   over DELIVERED or COMPLETED orders whose latest payment is PAID
+ *   (COMPLETED closes the lifecycle after DELIVERED handover).
+ *   Cancelled, in-flight, unpaid, failed, and refunded orders excluded.
  * - `period { orders, revenue }` — received orders + recognized revenue
  *   inside the selected range.
  * - `buckets[]` — `{ bucketStart, orders, revenue }`, zero-filled across

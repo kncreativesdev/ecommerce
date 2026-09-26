@@ -4,27 +4,40 @@ import {
   CircleDashed,
   Cog,
   Image as ImageIcon,
+  MapPin,
+  Navigation,
   Package,
   Truck,
   XCircle,
 } from 'lucide-react';
 import { formatINR } from '../../lib/format.js';
+import { orderStatusLabel } from '../../lib/orderStatus.js';
 import { resolveImageUrl } from '../../services/media.service.js';
 import { env } from '../../config/env.js';
 import { cn } from '../../lib/cn.js';
 
+/**
+ * Status badge meta: icon + tone only. Friendly labels live in the single
+ * definition (`lib/orderStatus.js`) shared with the timeline — never
+ * duplicated here. `SHIPPED` is the legacy code for the `DISPATCHED` step.
+ */
 const STATUS_META = {
-  PENDING: { icon: CircleDashed, classes: 'bg-warning/15 text-warning', label: 'Pending' },
-  CONFIRMED: { icon: CheckCircle2, classes: 'bg-primary/10 text-primary', label: 'Confirmed' },
-  PROCESSING: { icon: Cog, classes: 'bg-primary/10 text-primary', label: 'Processing' },
-  SHIPPED: { icon: Truck, classes: 'bg-secondary text-secondary-foreground', label: 'Shipped' },
-  DELIVERED: { icon: CheckCircle2, classes: 'bg-success/15 text-success', label: 'Delivered' },
-  CANCELLED: { icon: XCircle, classes: 'bg-destructive/15 text-destructive', label: 'Cancelled' },
+  PENDING: { icon: CircleDashed, classes: 'bg-warning/15 text-warning' },
+  CONFIRMED: { icon: CheckCircle2, classes: 'bg-primary/10 text-primary' },
+  PROCESSING: { icon: Cog, classes: 'bg-primary/10 text-primary' },
+  SHIPPED: { icon: Truck, classes: 'bg-secondary text-secondary-foreground' },
+  DISPATCHED: { icon: Package, classes: 'bg-secondary text-secondary-foreground' },
+  IN_TRANSIT: { icon: Truck, classes: 'bg-secondary text-secondary-foreground' },
+  ARRIVED_IN_CITY: { icon: MapPin, classes: 'bg-secondary text-secondary-foreground' },
+  OUT_FOR_DELIVERY: { icon: Navigation, classes: 'bg-secondary text-secondary-foreground' },
+  DELIVERED: { icon: CheckCircle2, classes: 'bg-success/15 text-success' },
+  COMPLETED: { icon: CheckCircle2, classes: 'bg-success/15 text-success' },
+  CANCELLED: { icon: XCircle, classes: 'bg-destructive/15 text-destructive' },
 };
 
 /** Order status badge — always icon + text, never color-only. */
 export function OrderStatusBadge({ status, className }) {
-  const meta = STATUS_META[status] ?? { icon: Package, classes: 'bg-secondary text-secondary-foreground', label: status ?? 'Unknown' };
+  const meta = STATUS_META[status] ?? { icon: Package, classes: 'bg-secondary text-secondary-foreground' };
   const Icon = meta.icon;
   return (
     <span
@@ -35,7 +48,7 @@ export function OrderStatusBadge({ status, className }) {
       )}
     >
       <Icon size={13} aria-hidden="true" />
-      {meta.label}
+      {orderStatusLabel(status)}
     </span>
   );
 }
