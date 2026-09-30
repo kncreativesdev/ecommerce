@@ -174,3 +174,21 @@ describe('CustomersPage', () => {
     expect(container.textContent).not.toContain('secret-should-never-render');
   });
 });
+
+describe('CustomersPage header refresh', () => {
+  it('offers a single top-right Refresh button that re-fetches the list', async () => {
+    const user = userEvent.setup();
+    fetchCustomers.mockResolvedValue({
+      customers: [customerFixture()],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    });
+    renderList();
+    await screen.findByText('Ada Lovelace');
+
+    expect(screen.getAllByRole('button', { name: 'Refresh' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Refresh list' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(fetchCustomers).toHaveBeenCalledTimes(2);
+  });
+});

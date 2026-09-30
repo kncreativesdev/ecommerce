@@ -96,21 +96,6 @@ async function findReviewByIdAdmin(id) {
   });
 }
 
-async function setReviewApproved(id, isApproved) {
-  return prisma.review.update({
-    where: { id },
-    data: { isApproved },
-    select: ADMIN_REVIEW_WITH_DETAILS_SELECT,
-  });
-}
-
-async function deleteReviewByIdAdmin(id) {
-  return prisma.review.delete({
-    where: { id },
-    select: { id: true },
-  });
-}
-
 async function findOrderItemForReview(orderItemId, userId) {
   return prisma.orderItem.findFirst({
     where: { id: orderItemId, order: { userId } },
@@ -187,9 +172,15 @@ const PUBLIC_REVIEW_SELECT = {
   },
 };
 
-async function findApprovedReviewsByProductId(productId) {
+/**
+ * Customer-visible product reviews (PDP): every submitted review is listed
+ * newest-first with no approval gate — customer reviews never require admin
+ * approval before becoming visible. The legacy `isApproved` column is kept
+ * for storage compatibility but no longer filters this query.
+ */
+async function findReviewsByProductId(productId) {
   return prisma.review.findMany({
-    where: { productId, isApproved: true },
+    where: { productId },
     orderBy: { createdAt: "desc" },
     select: PUBLIC_REVIEW_SELECT,
   });
@@ -204,7 +195,5 @@ module.exports = {
   deleteReviewByIdAndUserId,
   findReviewsAdmin,
   findReviewByIdAdmin,
-  setReviewApproved,
-  deleteReviewByIdAdmin,
-  findApprovedReviewsByProductId,
+  findReviewsByProductId,
 };

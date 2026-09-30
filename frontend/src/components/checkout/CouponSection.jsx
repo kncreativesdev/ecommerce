@@ -39,7 +39,8 @@ export function CouponSection({ disabled = false }) {
     } catch (applyError) {
       // Real backend semantics (COUPON_NOT_FOUND / COUPON_EXPIRED /
       // COUPON_INACTIVE / COUPON_MINIMUM_ORDER_NOT_MET /
-      // COUPON_NOT_APPLICABLE / COUPON_USAGE_LIMIT_EXCEEDED / …).
+      // COUPON_NOT_APPLICABLE / COUPON_USAGE_LIMIT_EXCEEDED /
+      // COUPON_ALREADY_USED / …).
       setError(applyError?.message ?? 'Coupon could not be applied. Please try again.');
     } finally {
       setApplying(false);
@@ -92,7 +93,7 @@ export function CouponSection({ disabled = false }) {
         </div>
       ) : (
         <form onSubmit={apply} className="flex flex-col gap-2">
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-col gap-2 rounded-xl border border-dashed border-border-strong/60 bg-card p-2 sm:flex-row sm:items-center">
             <label htmlFor="coupon-code" className="sr-only">
               Coupon code
             </label>
@@ -104,16 +105,20 @@ export function CouponSection({ disabled = false }) {
               placeholder="Enter coupon code"
               autoComplete="off"
               disabled={disabled || applying}
-              className="min-h-[44px] w-full flex-1 rounded-xl border border-input bg-card px-3.5 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 disabled:opacity-60"
+              aria-describedby="coupon-apply-hint"
+              className="min-h-[48px] w-full flex-1 rounded-lg border border-input bg-card px-3.5 text-sm font-medium text-foreground placeholder:text-muted-foreground transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 disabled:opacity-60"
             />
             <button
               type="submit"
               disabled={disabled || applying || draft.trim() === ''}
-              className="inline-flex min-h-[44px] cursor-pointer items-center justify-center rounded-xl bg-secondary px-5 text-sm font-semibold text-secondary-foreground transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+              className="inline-flex min-h-[48px] shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-7 text-sm font-bold text-primary-foreground shadow-sm transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-60 sm:min-w-[120px]"
             >
               {applying ? 'Applying…' : 'Apply'}
             </button>
           </div>
+          <p id="coupon-apply-hint" className="text-xs text-muted-foreground">
+            Enter your code, then click <span className="font-bold text-foreground">Apply</span> to add the discount.
+          </p>
           {error ? (
             <p role="alert" className="text-xs font-medium text-destructive">
               {error}

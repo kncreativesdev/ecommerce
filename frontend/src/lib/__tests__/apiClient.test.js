@@ -166,3 +166,36 @@ describe('apiClient refresh retry guards', () => {
     expect(onAuthFailure).not.toHaveBeenCalled();
   });
 });
+
+describe('apiClient error details (backend envelope contract)', () => {
+  it('preserves field errors nested in error.details', async () => {
+    const refreshSpy = vi.fn(async () => null);
+    setAuthHandler({ getAccessToken: () => null, refreshAccessToken: refreshSpy, onAuthFailure: () => {} });
+    const payload = {
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid request data',
+        details: [{ path: 'details', message: 'Details are required when the reason is Other.' }],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(payload, { ok: false, status: 422 })));
+
+    await expect(apiGet('/orders/o1/returns')).rejects.toMatchObject({
+      status: 422,
+      code: 'VALIDATION_ERROR',
+      details: [{ path: 'details', message: 'Details are required when the reason is Other.' }],
+    });
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('defaults details to [] when the envelope carries none', async () => {
+    setAuthHandler({ getAccessToken: () => null, refreshAccessToken: async () => null, onAuthFailure: () => {} });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ success: false, error: { code: 'ORDER_NOT_FOUND', message: 'Missing' } }, { ok: false, status: 404 })),
+    );
+
+    await expect(apiGet('/orders/nope')).rejects.toMatchObject({ status: 404, details: [] });
+  });
+});

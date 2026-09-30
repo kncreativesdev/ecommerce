@@ -14,6 +14,11 @@ import { apiGet, apiPost } from '../lib/apiClient.js';
  *   rotated cookie. Wired into `apiClient`'s single-flight 401 flow.
  * - `POST /auth/logout` (credentials so the cookie clears) → `200`.
  * - `GET /auth/me` (bearer) → `{ user }` for session bootstrap.
+ * - `POST /auth/google` (public, rate-limited) → `200 { user, accessToken }`
+ *   + HttpOnly refresh cookie. Body `{ idToken }`: a Google Identity
+ *   Services ID token verified server-side (existing session shape —
+ *   existing accounts link by verified email, new ones are created as
+ *   CUSTOMER). Unconfigured backend → `503 AUTH_GOOGLE_NOT_CONFIGURED`.
  *
  * No password-reset / email-verification endpoints exist — no such flows.
  * Services contain no React state; stores call these functions.
@@ -22,7 +27,7 @@ export function registerRequest({ email, password, firstName, lastName, phone })
   const body = {
     email: email.trim().toLowerCase(),
     password,
-    ...(firstName?.trim() ? { firstName: firstName.trim() } : {}),
+    firstName: firstName.trim(),
     ...(lastName?.trim() ? { lastName: lastName.trim() } : {}),
     ...(phone?.trim() ? { phone: phone.trim() } : {}),
   };
@@ -39,6 +44,14 @@ export function loginRequest({ email, password }) {
       email: email.trim().toLowerCase(),
       password,
     },
+    { credentials: 'include', skipAuthRefresh: true },
+  );
+}
+
+export function googleSignInRequest({ idToken }) {
+  return apiPost(
+    '/auth/google',
+    { idToken },
     { credentials: 'include', skipAuthRefresh: true },
   );
 }

@@ -139,10 +139,15 @@ export function VariantMediaSection({ productId, variants = [] }) {
 
   const handlePrimary = async (image) => {
     if (!productId || !image?.id || primaryId) return;
+    // Set-primary is one-way: the button only renders for non-primary
+    // images, so always promote. The backend demotes every other image of
+    // the same product atomically — the refetch below reconciles the list
+    // so exactly the selected image keeps the Primary badge.
+    if (image.isPrimary) return;
     setPrimaryId(image.id);
     try {
-      await updateImageMetadata(productId, image.id, { isPrimary: !image.isPrimary });
-      toast.success(image.isPrimary ? 'Primary flag removed.' : 'Marked as primary image.');
+      await updateImageMetadata(productId, image.id, { isPrimary: true });
+      toast.success('Marked as primary image.');
       refresh();
     } catch (primaryError) {
       toast.error(primaryError?.message ?? 'Update failed. Please try again.');
@@ -269,7 +274,7 @@ export function VariantMediaSection({ productId, variants = [] }) {
                               <button
                                 type="button"
                                 onClick={() => handlePrimary(image)}
-                                disabled={primaryId === image.id}
+                                disabled={primaryId !== null}
                                 aria-label={`Mark image as primary for variant ${variant.sku}`}
                                 title="Mark as primary"
                                 className="inline-flex h-9 min-w-9 cursor-pointer items-center justify-center gap-1 rounded-lg px-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground disabled:cursor-wait disabled:opacity-60"

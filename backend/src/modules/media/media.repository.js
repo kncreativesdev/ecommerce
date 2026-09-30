@@ -29,18 +29,29 @@ async function findImageByIdAndProductId(imageId, productId) {
   });
 }
 
-async function createImage(data) {
-  return prisma.productImage.create({
+async function createImage(data, client = prisma) {
+  return client.productImage.create({
     data,
     select: IMAGE_SELECT,
   });
 }
 
-async function updateImage(imageId, data) {
-  return prisma.productImage.update({
+async function updateImage(imageId, data, client = prisma) {
+  return client.productImage.update({
     where: { id: imageId },
     data,
     select: IMAGE_SELECT,
+  });
+}
+
+async function demoteOtherImages(productId, exceptImageId, client = prisma) {
+  return client.productImage.updateMany({
+    where: {
+      productId,
+      isPrimary: true,
+      ...(exceptImageId ? { id: { not: exceptImageId } } : {}),
+    },
+    data: { isPrimary: false },
   });
 }
 
@@ -57,4 +68,5 @@ module.exports = {
   createImage,
   updateImage,
   deleteImage,
+  demoteOtherImages,
 };

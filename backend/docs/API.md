@@ -174,15 +174,26 @@ Order lifecycle is a forward-only state machine
 (`PENDING → CONFIRMED → PROCESSING → DISPATCHED → IN_TRANSIT →
 ARRIVED_IN_CITY → OUT_FOR_DELIVERY → DELIVERED → COMPLETED`;
 `CANCELLED` from pre-dispatch states only; `SHIPPED` is a legacy
-read-only state). Transitions are ADMIN-only, validated server-side,
-and atomically append one immutable `order_status_history` row plus one
-customer notification. Same-status writes are rejected (`409`).
+read-only state). Status transitions are validated server-side and
+atomically append one immutable `order_status_history` row plus one
+customer notification. Cancellation additionally moves the order's
+payments to `CANCELLED` inside the same transaction. Admin transitions
+live under ADMIN-only `/orders/admin*`. Customers may cancel only their
+own eligible orders (`POST /orders/:id/cancel`,
+PENDING/CONFIRMED/PROCESSING) through the same atomic transaction and
+lifecycle rules — anything else is rejected (`409`). Same-status writes
+are rejected (`409`).
 
 ## 14. Payments
 
 Initial payment method:
 
 `CASH_ON_DELIVERY`
+
+Payment states: `PENDING → PAID|FAILED`, `FAILED → PAID`, `PAID →
+REFUNDED` (manual record, no gateway). `CANCELLED` is terminal and is
+written only by the atomic order-cancellation transaction — never by
+the standalone payment-status endpoint and never as `REFUNDED`.
 
 Online gateway integration is not part of the initial API implementation.
 

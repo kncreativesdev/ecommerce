@@ -10,6 +10,8 @@ const mediaRoutes = require("../modules/media/media.routes");
 const cartRoutes = require("../modules/cart/cart.routes");
 const wishlistRoutes = require("../modules/wishlist/wishlist.routes");
 const ordersRoutes = require("../modules/orders/orders.routes");
+const returnsRoutes = require("../modules/returns/returns.routes");
+const returnsAdminRoutes = require("../modules/returns/returns.admin.routes");
 const notificationsRoutes = require("../modules/notifications/notifications.routes");
 const marketingRoutes = require("../modules/marketing/marketing.routes");
 const announcementsRoutes = require("../modules/announcements/announcements.routes");
@@ -39,6 +41,12 @@ router.use("/products/:productId/images", mediaRoutes);
 router.use("/cart", cartRoutes);
 router.use("/wishlist", wishlistRoutes);
 router.use("/orders", ordersRoutes);
+// Customer return requests are a separate domain nested under their order
+// (same mergeParams pattern as product images).
+router.use("/orders/:orderId/returns", returnsRoutes);
+// Admin return-request reads (list + detail). Status mutation does not
+// exist in the backend workflow, so no write endpoint is exposed here.
+router.use("/returns", returnsAdminRoutes);
 router.use("/notifications", notificationsRoutes);
 router.use("/marketing/notifications", marketingRoutes);
 router.use("/announcements", announcementsRoutes);

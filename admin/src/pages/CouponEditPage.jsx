@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronRight, ReceiptText } from 'lucide-react';
+import { ChevronRight, History, ReceiptText } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCouponStore } from '../stores/useCouponStore.js';
 import { fetchCouponById } from '../services/coupon.service.js';
 import { fetchProducts } from '../services/product.service.js';
 import { CouponForm } from '../components/catalog/CouponForm.jsx';
+import { CouponHistory } from '../components/catalog/CouponHistory.jsx';
 import { EmptyState } from '../components/ui/EmptyState.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
+import { Modal } from '../components/ui/Modal.jsx';
 import { couponUsageSummary } from '../utils/coupons.js';
 
 /**
@@ -30,6 +32,7 @@ export function CouponEditPage() {
   const [productsLoading, setProductsLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [prevId, setPrevId] = useState(id);
 
   // Render-time reset when navigating between coupon ids (sanctioned
@@ -39,7 +42,15 @@ export function CouponEditPage() {
     setCoupon(null);
     setError(null);
     setStatus('loading');
+    setHistoryOpen(false);
   }
+
+  // Stable modal close handler: Modal focuses itself whenever its onClose
+  // identity changes, so an inline arrow would steal focus on every parent
+  // render (same pattern as the inventory history modal).
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+  }, []);
 
   useEffect(() => {
     document.title = 'Edit Coupon — Tech Pulse Admin';
@@ -131,9 +142,20 @@ export function CouponEditPage() {
         <ErrorState title="Couldn’t load the coupon" message={error?.message} onRetry={reload} />
       ) : (
         <>
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-mono text-xl font-bold tracking-tight text-foreground">{coupon.code}</h2>
-            <p className="text-sm tabular-nums text-muted-foreground">{couponUsageSummary(coupon)} · usage is server-managed</p>
+            <span className="flex flex-wrap items-center gap-2">
+              <p className="text-sm tabular-nums text-muted-foreground">{couponUsageSummary(coupon)} · usage is server-managed</p>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(true)}
+                aria-label={`View coupon history for ${coupon.code}`}
+                title="Coupon history"
+                className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground"
+              >
+                <History size={17} aria-hidden="true" />
+              </button>
+            </span>
           </div>
           <CouponForm
             key={coupon.id}
@@ -145,6 +167,12 @@ export function CouponEditPage() {
           />
         </>
       )}
+
+      {historyOpen && coupon ? (
+        <Modal title={`Coupon history — ${coupon.code}`} onClose={closeHistory}>
+          <CouponHistory key={coupon.id} couponId={coupon.id} />
+        </Modal>
+      ) : null}
     </div>
   );
 }

@@ -111,7 +111,10 @@ describe('ProductForm variant-first create UX', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('blocks submit when Variant 2 has zero images and names that variant', async () => {
+  // Timing-marginal: ~15 sequential userEvent interactions + file upload
+  // (measured ~2.7s isolated, ~5.2s under full-suite worker contention).
+  // Scoped timeout only — assertions and interactions unchanged.
+  it('blocks submit when Variant 2 has zero images and names that variant', { timeout: 20000 }, async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const { container } = renderCreate({ onSubmit });
@@ -143,7 +146,8 @@ describe('ProductForm variant-first create UX', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it('submits variants with per-variant files and no product-level image collection', async () => {
+  // Timing-marginal: heaviest interaction test in this file (see above).
+  it('submits variants with per-variant files and no product-level image collection', { timeout: 20000 }, async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const { container } = renderCreate({ onSubmit });

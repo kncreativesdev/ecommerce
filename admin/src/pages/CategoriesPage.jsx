@@ -165,10 +165,15 @@ export function CategoriesPage() {
               : `${tree.length} parent ${tree.length === 1 ? 'category' : 'categories'} · ${totalSubcategories} ${totalSubcategories === 1 ? 'subcategory' : 'subcategories'}`}
           </p>
         </div>
-        <Button onClick={() => setFormState({ mode: 'create' })}>
-          <Plus size={17} aria-hidden="true" />
-          Add Category
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={() => refreshCategories()} disabled={isLoading}>
+            Refresh
+          </Button>
+          <Button onClick={() => setFormState({ mode: 'create' })}>
+            <Plus size={17} aria-hidden="true" />
+            Add Category
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -327,7 +332,7 @@ function CategoryRow({ category, depth, activatingId, onEdit, onDeactivate, onAc
     <li>
       <div
         className={cn(
-          'flex min-h-[56px] items-center gap-3 px-4 py-2.5',
+          'flex min-h-[56px] flex-wrap items-center gap-3 px-4 py-2.5',
           depth > 0 && 'border-l-2 border-accent/60 bg-surface-muted/40',
         )}
         style={depth > 0 ? { paddingLeft: `${1 + depth * 1.25}rem` } : undefined}

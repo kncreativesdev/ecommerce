@@ -28,6 +28,13 @@ providers. No secrets are included.
   with `data.accessToken` and sets the `refresh_token` cookie. Store the
   access token in memory (not localStorage, by recommendation) and attach
   it as the bearer header.
+- Google sign-in: `POST /api/v1/auth/google` with a Google Identity
+  Services `{ idToken }`. The backend verifies the token with Google,
+  links by verified email (creating a `CUSTOMER` account for new users),
+  and returns the same `200 { user, accessToken }` + refresh cookie as
+  password login. Requires `GOOGLE_CLIENT_ID` server-side (else `503
+  AUTH_GOOGLE_NOT_CONFIGURED`); bad tokens → `401
+  AUTH_GOOGLE_INVALID_TOKEN`.
 - Access authentication: short-lived JWT (default 15 minutes). When calls
   start returning `401`, the token has expired — use refresh, not re-login.
 - Refresh: `POST /api/v1/auth/refresh` with no body; the cookie is sent
@@ -137,11 +144,14 @@ UUIDs.
   (failed orders never consume). Coupon edits/deactivation never rewrite
   existing orders.
 - Order response: `orderNumber` (`ORD-YYYY-NNNNNN`), `status`,
-  string totals, `items[]` snapshots, `addresses[]` snapshots,
-  `payments[]`, plus `statusHistory[]` oldest-first
-  (`{ id, status, previousStatus, note, createdAt }`; `[]` for
-  pre-milestone orders — fall back to `status`/`createdAt`/`updatedAt`,
-  never invent rows). Save `orderId` for history and `items[].id` for reviews.
+  string totals, `coupon` brief (`{ id, code, description, discountType,
+  discountValue }`, `null` when no coupon was used — the effective amount
+  stays snapshotted in `discountTotal`), `items[]` snapshots,
+  `addresses[]` snapshots, `payments[]`, plus `statusHistory[]`
+  oldest-first (`{ id, status, previousStatus, note, createdAt }`; `[]`
+  for pre-milestone orders — fall back to
+  `status`/`createdAt`/`updatedAt`, never invent rows). Save `orderId`
+  for history and `items[].id` for reviews.
 - Lifecycle (ADMIN-only `/orders/admin/:id/status { status, note? }`;
   forward-only machine `PENDING → CONFIRMED → PROCESSING → DISPATCHED →
   IN_TRANSIT → ARRIVED_IN_CITY → OUT_FOR_DELIVERY → DELIVERED →
@@ -156,11 +166,16 @@ UUIDs.
 - Cart clearing: items are removed only on success.
 - Order ownership: users see only their own orders (`GET /orders`,
   `GET /orders/:id`); other users' ids return `404`.
-- NOT available on the customer surface: cancellation, status changes,
-  payment mutation or capture, partial checkout, or
-  choosing prices/totals — any such fields are rejected. (Admin order
-  operations live under `ADMIN`-only `/orders/admin*`; see the contract
-  matrix.)
+- Customer cancellation: `POST /orders/:id/cancel` cancels the caller's
+  own order when it is still cancellable (`PENDING|CONFIRMED|PROCESSING`
+  per the lifecycle; anything else → `409`). Same atomic effects as an
+  admin cancellation (status + payment cancellation + history row +
+  notification + inventory restore). Other users' ids return `404`.
+- NOT available on the customer surface: status changes beyond
+  self-cancellation, payment mutation or capture, partial checkout, or
+  choosing prices/totals — any such fields are rejected. (Remaining admin
+  order operations live under `ADMIN`-only `/orders/admin*`; see the
+  contract matrix.)
 
 ## 8. Reviews
 
@@ -174,16 +189,14 @@ UUIDs.
 - Ownership: users can read, update (rating/title/comment subset), and
   hard-delete only their own reviews; other ids return `404`.
 - Delete behavior: permanent; re-delete returns `404`.
-- Admin moderation (ADMIN-only `/reviews/admin*`; see the contract
-  matrix): `GET /reviews/admin` lists every review with a customer brief
-  (`?page,limit,isApproved,rating,productId,userId,search,sortBy,sortOrder`,
-  `meta` pagination); `PATCH /reviews/admin/:id { isApproved }`
-  approves (`true`) or rejects (`false` — rejected rows stay stored and
-  remain listed under `isApproved=false`); `DELETE /reviews/admin/:id`
-  hard-deletes without touching order records.
-- No public product-review listing or aggregate (average/count)
-  endpoints exist: moderation state is authoritative but not yet consumed
-  by any customer surface.
+- Immediate visibility: reviews are created already approved and the
+  public product listing (`GET /reviews/product/:productId`, no auth)
+  returns every submitted review newest-first with no approval gate and
+  no private customer data.
+- Admin review access is READ-ONLY (ADMIN-only `GET /reviews/admin`
+  with `?page,limit,isApproved,rating,productId,userId,search,sortBy,sortOrder`,
+  `meta` pagination): no approve, reject, edit, delete, or status-change
+  endpoints exist.
 
 ## 9. Admin dashboard and inventory (admin UI only)
 

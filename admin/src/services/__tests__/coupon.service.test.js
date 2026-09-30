@@ -6,6 +6,7 @@ import {
   deactivateCoupon,
   deleteCoupon,
   fetchCouponById,
+  fetchCouponHistory,
   fetchCoupons,
   updateCoupon,
 } from '../coupon.service.js';
@@ -109,5 +110,39 @@ describe('coupon.service mutations', () => {
     await deleteCoupon('coupon-1');
 
     expect(apiDelete).toHaveBeenCalledWith('/coupons/coupon-1');
+  });
+});
+
+describe('coupon.service history', () => {
+  const entry = {
+    id: 'history-1',
+    couponId: 'coupon-1',
+    action: 'CREATED',
+    actor: { id: 'admin-1', email: 'admin@example.test' },
+    metadata: { snapshot: { code: 'SAVE10' } },
+    createdAt: '2026-09-01T00:00:00.000Z',
+  };
+
+  it('fetches history newest-first with pagination meta', async () => {
+    apiGetPage.mockResolvedValue({
+      data: { history: [entry] },
+      meta: { page: 1, limit: 10, total: 1, totalPages: 1 },
+    });
+
+    const result = await fetchCouponHistory('coupon-1', { page: 1, limit: 10 });
+
+    expect(apiGetPage).toHaveBeenCalledWith('/coupons/coupon-1/history?page=1&limit=10');
+    expect(result.history).toEqual([entry]);
+    expect(result.pagination).toEqual({ page: 1, limit: 10, total: 1, totalPages: 1 });
+  });
+
+  it('passes explicit page/limit and defaults missing rows/meta', async () => {
+    apiGetPage.mockResolvedValue({ data: {}, meta: null });
+
+    const result = await fetchCouponHistory('coupon-1', { page: 2, limit: 10 });
+
+    expect(apiGetPage).toHaveBeenCalledWith('/coupons/coupon-1/history?page=2&limit=10');
+    expect(result.history).toEqual([]);
+    expect(result.pagination).toEqual({ page: 2, limit: 10, total: 0, totalPages: 1 });
   });
 });

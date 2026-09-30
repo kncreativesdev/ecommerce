@@ -46,11 +46,26 @@ export function updateProduct(id, payload) {
 }
 
 /**
- * Product deactivate — `DELETE /products/:id` (ADMIN) → `200 { product }`.
- * SOFT-DEACTIVATE (`isActive=false`, hidden from storefront reads).
- * Repeat/unknown ids → `404 PRODUCT_NOT_FOUND`.
+ * Product deactivate — `PATCH /products/:id { isActive: false }` (ADMIN) →
+ * `200 { product }`. SOFT-DEACTIVATE (`isActive=false`, hidden from
+ * storefront reads). Rejected with `409 PRODUCT_HAS_ACTIVE_ORDERS`
+ * (blocking order numbers in the error details, product untouched) while
+ * an in-process order still contains the product — the UI must surface
+ * the backend message. Repeat/unknown ids → `404 PRODUCT_NOT_FOUND`.
  */
 export function deactivateProduct(id) {
+  return apiPatch(`/products/${id}`, { isActive: false }).then((data) => data?.product ?? null);
+}
+
+/**
+ * Product delete — `DELETE /products/:id` (ADMIN) → `200 { product }`.
+ * Lifecycle rule: rejected with `409 PRODUCT_ACTIVE_CANNOT_DELETE`
+ * while the product is still active (deactivate first — the product is
+ * left unchanged). Only already-inactive products confirm deletion
+ * (existing idempotent soft-deactivate semantics). Unknown ids → `404
+ * PRODUCT_NOT_FOUND`.
+ */
+export function deleteProduct(id) {
   return apiDelete(`/products/${id}`).then((data) => data?.product ?? null);
 }
 

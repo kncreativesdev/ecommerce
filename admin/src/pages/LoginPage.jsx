@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { LogIn, Zap } from 'lucide-react';
+import { Eye, EyeOff, LogIn, Zap } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore.js';
 import { Button } from '../components/ui/Button.jsx';
 import { Field, Input } from '../components/ui/Field.jsx';
@@ -34,6 +34,7 @@ export function LoginPage() {
 
   const isAdmin = Array.isArray(user?.roles) && user.roles.includes('ADMIN');
   const redirectTo = safeRedirect(searchParams.get('redirect'));
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
@@ -112,14 +113,26 @@ export function LoginPage() {
           </Field>
           <Field label="Password" required error={errors.password?.message}>
             {({ errorId }) => (
-              <Input
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••"
-                aria-invalid={Boolean(errors.password)}
-                aria-describedby={errorId}
-                {...register('password')}
-              />
+              <div className="relative">
+                <Input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  aria-invalid={Boolean(errors.password)}
+                  aria-describedby={errorId}
+                  className="pr-12"
+                  {...register('password')}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors duration-200 hover:bg-surface-muted hover:text-foreground"
+                >
+                  {showPassword ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+                </button>
+              </div>
             )}
           </Field>
 

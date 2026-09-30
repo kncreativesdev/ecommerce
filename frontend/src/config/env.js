@@ -52,6 +52,10 @@ export const env = {
   whatsappLink: readString('VITE_WHATSAPP_LINK', ''),
   /** Empty until the Maps embed is configured (Support page shows a fallback). */
   googleMapsEmbedUrl: readString('VITE_GOOGLE_MAPS_EMBED_URL', ''),
+  /** Google Identity Services OAuth client ID. Empty until configured — the
+      Continue with Google button stays visible and explains the setup;
+      the backend answers 503 until GOOGLE_CLIENT_ID is set there. */
+  googleClientId: readString('VITE_GOOGLE_CLIENT_ID', ''),
   /** Placeholder until real company information is provided. */
   supportEmail: readString('VITE_SUPPORT_EMAIL', 'support@example.com'),
   isDev: Boolean(import.meta.env?.DEV),

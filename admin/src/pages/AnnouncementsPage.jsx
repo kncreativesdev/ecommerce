@@ -351,7 +351,7 @@ export function AnnouncementsPage() {
                     <td className="px-4 py-3 tabular-nums text-muted-foreground">{announcement.priority ?? 0}</td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {announcement.linkTarget ? (
-                        <span className="font-mono text-xs">
+                        <span className="block max-w-56 break-all font-mono text-xs">
                           {announcement.linkLabel ? `${announcement.linkLabel} → ` : ''}
                           {announcement.linkTarget}
                         </span>

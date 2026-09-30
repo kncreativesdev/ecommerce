@@ -72,7 +72,9 @@ function toApiError(response, payload) {
     status: response.status,
     code: error.code ?? `HTTP_${response.status}`,
     message: error.message ?? 'Request failed.',
-    details: Array.isArray(payload?.details) ? payload.details : [],
+    // Field errors live inside `error` per the backend envelope
+    // (`{ success: false, error: { code, message, details } }`).
+    details: Array.isArray(error.details) ? error.details : [],
   });
 }
 

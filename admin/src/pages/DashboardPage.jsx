@@ -278,7 +278,7 @@ export function DashboardPage() {
       <div
         role="group"
         aria-label="Dashboard date range"
-        className="inline-flex w-fit items-center gap-1 rounded-xl border border-border bg-card p-1 shadow-sm"
+        className="inline-flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl border border-border bg-card p-1 shadow-sm"
       >
         {RANGES.map((option) => (
           <button
@@ -478,7 +478,7 @@ export function DashboardPage() {
               <h3 className="text-sm font-bold text-foreground">Catalog</h3>
               <Link
                 to="/catalog/categories"
-                className="group flex items-center justify-between gap-2 rounded-lg border border-border px-3.5 py-2.5 transition-colors hover:bg-surface-muted hover:no-underline"
+                className="group flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3.5 py-2.5 transition-colors hover:bg-surface-muted hover:no-underline"
               >
                 <span className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
                   <FolderTree size={16} aria-hidden="true" className="text-muted-foreground" />
@@ -490,7 +490,7 @@ export function DashboardPage() {
               </Link>
               <Link
                 to="/catalog/products"
-                className="group flex items-center justify-between gap-2 rounded-lg border border-border px-3.5 py-2.5 transition-colors hover:bg-surface-muted hover:no-underline"
+                className="group flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3.5 py-2.5 transition-colors hover:bg-surface-muted hover:no-underline"
               >
                 <span className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
                   <Package size={16} aria-hidden="true" className="text-muted-foreground" />

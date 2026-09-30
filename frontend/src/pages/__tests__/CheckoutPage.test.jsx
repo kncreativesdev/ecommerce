@@ -3,6 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CheckoutPage } from '../CheckoutPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useCartStore } from '../../stores/useCartStore.js';
 import { useCheckoutStore } from '../../stores/useCheckoutStore.js';
 import { createOrder } from '../../services/orders.service.js';
@@ -94,6 +95,12 @@ async function fillAddress(user, container, values) {
 beforeEach(() => {
   vi.clearAllMocks();
   useCheckoutStore.getState().reset();
+  // Checkout requires a profile phone; the default fixture customer has one.
+  useAuthStore.setState({
+    user: { id: 'u1', email: 'buyer@example.test', firstName: 'Buyer', phone: '9876543210' },
+    accessToken: 'token',
+    status: 'ready',
+  });
   useCartStore.setState({ cart: CART, status: 'success', bootstrap: vi.fn().mockResolvedValue(null) });
   fetchAddresses.mockResolvedValue([HOME, OFFICE]);
   createOrder.mockResolvedValue({ id: 'order-1' });
@@ -181,6 +188,47 @@ describe('CheckoutPage saved addresses', () => {
 
     await screen.findByRole('radiogroup', { name: /shipping address/i });
     expect(useCheckoutStore.getState().shippingAddressId).toBe('a-home');
+  });
+});
+
+describe('CheckoutPage review step prominence', () => {
+  async function goToReviewStep(user) {
+    renderCheckout();
+    await screen.findByRole('radiogroup', { name: /shipping address/i });
+    await user.click(screen.getByRole('button', { name: /continue to billing/i }));
+    await user.click(screen.getByRole('button', { name: /review order/i }));
+    return screen.findByRole('region', { name: /review and place order/i });
+  }
+
+  it('renders a prominent review heading with items, quantities, prices, and totals', async () => {
+    const user = userEvent.setup();
+    const section = await goToReviewStep(user);
+
+    expect(within(section).getByRole('heading', { name: '3. Review your order' })).toBeInTheDocument();
+    expect(within(section).getByText(/confirm your items/i)).toBeInTheDocument();
+    // Item information: name, quantity, unit price, line total.
+    expect(within(section).getByText('Test Widget')).toBeInTheDocument();
+    expect(within(section).getByText(/qty 2/i)).toBeInTheDocument();
+    expect(within(section).getAllByText(/200\.00/).length).toBeGreaterThanOrEqual(2);
+    // Summary: subtotal, free shipping, distinct total payable.
+    const summary = within(section).getByRole('group', { name: 'Order summary' });
+    expect(within(summary).getByText(/subtotal/i)).toBeInTheDocument();
+    expect(within(summary).getByText('Free')).toBeInTheDocument();
+    expect(within(summary).getByText('Total payable')).toBeInTheDocument();
+  });
+
+  it('reflects the applied coupon discount in the review summary', async () => {
+    const user = userEvent.setup();
+    useCheckoutStore.setState({
+      appliedCoupon: { coupon: { code: 'SAVE10' }, discountAmount: '20.00' },
+    });
+    const section = await goToReviewStep(user);
+    const summary = within(section).getByRole('group', { name: 'Order summary' });
+
+    expect(within(summary).getByText(/SAVE10/)).toBeInTheDocument();
+    expect(within(summary).getAllByText(/20\.00/).length).toBeGreaterThanOrEqual(1);
+    // Display-only total: 200 − 20 = 180.
+    expect(within(section).getAllByText(/180\.00/).length).toBeGreaterThanOrEqual(1);
   });
 });
 

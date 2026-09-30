@@ -1,8 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { UserPlus } from 'lucide-react';
+import { Eye, EyeOff, UserPlus } from 'lucide-react';
 import { Container } from '../components/ui/Container.jsx';
 import { FormField, TextInput } from '../components/ui/FormField.jsx';
 import { registerSchema } from '../schemas/auth.schema.js';
@@ -28,6 +28,7 @@ export function RegisterPage() {
   const registerThenLogin = useAuthStore((state) => state.registerThenLogin);
   const isAuthenticated = Boolean(useAuthStore((state) => state.accessToken));
   const status = useAuthStore((state) => state.status);
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
@@ -89,23 +90,35 @@ export function RegisterPage() {
           </FormField>
           <FormField label="Password" required hint="8–128 characters." error={errors.password?.message}>
             {({ describedBy }) => (
-              <TextInput
-                type="password"
-                autoComplete="new-password"
-                placeholder="Choose a strong password"
-                aria-invalid={Boolean(errors.password)}
-                aria-describedby={describedBy}
-                {...register('password')}
-              />
+              <div className="relative">
+                <TextInput
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  placeholder="Choose a strong password"
+                  aria-invalid={Boolean(errors.password)}
+                  aria-describedby={describedBy}
+                  className="pr-12"
+                  {...register('password')}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className="absolute right-1.5 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors duration-200 hover:bg-surface-muted hover:text-foreground"
+                >
+                  {showPassword ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}
+                </button>
+              </div>
             )}
           </FormField>
           <div className="grid gap-4 sm:grid-cols-2">
-            <FormField label="First name" error={errors.firstName?.message}>
+            <FormField label="First name" required error={errors.firstName?.message}>
               {({ describedBy }) => (
                 <TextInput
                   type="text"
                   autoComplete="given-name"
-                  placeholder="Optional"
+                  placeholder="Your first name"
                   aria-invalid={Boolean(errors.firstName)}
                   aria-describedby={describedBy}
                   {...register('firstName')}

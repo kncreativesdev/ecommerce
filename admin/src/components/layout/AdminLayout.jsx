@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   BadgePercent,
@@ -14,6 +14,7 @@ import {
   ShoppingCart,
   Star,
   Sun,
+  Undo2,
   Users,
   X,
   Zap,
@@ -44,6 +45,7 @@ const NAV_SECTIONS = [
     label: 'Operations',
     items: [
       { to: '/orders', label: 'Orders', icon: ShoppingCart, end: false },
+      { to: '/returns', label: 'Return Orders', icon: Undo2, end: false },
       { to: '/inventory', label: 'Inventory', icon: Boxes, end: false },
     ],
   },
@@ -152,6 +154,35 @@ export function AdminLayout() {
   const user = useAuthStore((state) => state.user);
   const logout = useAuthStore((state) => state.logout);
   const closeSidebar = () => setSidebarOpen(false);
+  const closeButtonRef = useRef(null);
+  const [prevPathname, setPrevPathname] = useState(pathname);
+
+  // Render-time reset when the route changes: the drawer must never cover
+  // the page after navigation (back/forward and programmatic navigations
+  // bypass the per-link close handler). Sanctioned derived-state pattern
+  // used across the codebase; effects below only sync async subscriptions.
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
+    setSidebarOpen(false);
+  }
+
+  // While open on tablet/mobile: Escape dismisses, the page behind stays
+  // put (scroll lock), and focus moves into the drawer. All state updates
+  // happen in event callbacks or cleanup — never synchronously in the body.
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setSidebarOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closeButtonRef.current?.focus();
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [sidebarOpen]);
 
   const handleLogout = async () => {
     await logout();
@@ -165,8 +196,10 @@ export function AdminLayout() {
         ? 'Announcements'
         : pathname.startsWith('/orders')
       ? 'Orders'
-      : pathname.startsWith('/inventory')
-        ? 'Inventory'
+      : pathname.startsWith('/returns')
+        ? 'Return Orders'
+        : pathname.startsWith('/inventory')
+          ? 'Inventory'
       : pathname.startsWith('/customers')
         ? 'Customers'
         : pathname.startsWith('/reviews')
@@ -193,18 +226,23 @@ export function AdminLayout() {
         <div aria-hidden="true" onClick={closeSidebar} className="fixed inset-0 z-30 bg-black/50 lg:hidden" />
       ) : null}
 
-      {/* Sidebar */}
+      {/* Sidebar: full panel on desktop, slide-in drawer below `lg`. The
+          closed drawer is `invisible` (not merely off-canvas) so keyboard
+          and assistive tech cannot reach it; `lg:visible` keeps desktop
+          unaffected. Long navigation scrolls independently. */}
       <aside
+        id="admin-sidebar"
         aria-label="Admin sidebar"
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col gap-6 bg-sidebar px-4 py-5 text-sidebar-foreground transition-transform duration-200 lg:sticky lg:top-0 lg:h-svh lg:translate-x-0',
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+          'fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col gap-6 bg-sidebar px-4 py-5 text-sidebar-foreground transition-transform duration-200 lg:sticky lg:top-0 lg:h-svh lg:translate-x-0 lg:visible',
+          sidebarOpen ? 'visible translate-x-0' : 'invisible -translate-x-full',
         )}
       >
         <div className="flex items-center justify-between">
           <BrandMark onNavigate={closeSidebar} />
           <button
             type="button"
+            ref={closeButtonRef}
             onClick={closeSidebar}
             aria-label="Close navigation"
             className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-sidebar-muted transition-colors hover:bg-white/10 hover:text-sidebar-foreground lg:hidden"
@@ -212,7 +250,9 @@ export function AdminLayout() {
             <X size={20} aria-hidden="true" />
           </button>
         </div>
-        <SidebarNav onNavigate={closeSidebar} />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <SidebarNav onNavigate={closeSidebar} />
+        </div>
         <div className="mt-auto rounded-lg bg-white/5 p-3 text-xs leading-5 text-sidebar-muted">
           Signed in as
           <p className="truncate font-semibold text-sidebar-foreground">{user?.email ?? '—'}</p>
@@ -226,6 +266,8 @@ export function AdminLayout() {
             type="button"
             onClick={() => setSidebarOpen(true)}
             aria-label="Open navigation"
+            aria-expanded={sidebarOpen}
+            aria-controls="admin-sidebar"
             className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground lg:hidden"
           >
             <Menu size={20} aria-hidden="true" />

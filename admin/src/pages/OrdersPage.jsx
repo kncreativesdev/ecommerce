@@ -223,14 +223,22 @@ export function OrdersPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Orders" meta={meta} />
+      <PageHeader
+        title="Orders"
+        meta={meta}
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => refreshOrders()} disabled={isLoading}>
+            Refresh
+          </Button>
+        }
+      />
 
       {!isLoading && !error && (
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <div role="search" className="relative w-full lg:max-w-md">
               <label htmlFor="order-search" className="sr-only">
-                Search orders by order number, customer, or SKU
+                Search orders by order number, customer, product, or SKU
               </label>
               <Search size={17} aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input
@@ -241,7 +249,7 @@ export function OrdersPage() {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') applySearch();
                 }}
-                placeholder="Search order no., customer, SKU…"
+                placeholder="Search order no., customer, product, SKU…"
                 autoComplete="off"
                 className="min-h-[44px] w-full rounded-lg border border-input bg-surface pl-10 pr-10 text-sm text-foreground placeholder:text-muted-foreground transition-colors duration-200 focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 hover:border-border-strong"
               />
@@ -580,19 +588,14 @@ export function OrdersPage() {
         </>
       )}
 
-      <div className="flex justify-start">
-        <Button variant="secondary" onClick={() => refreshOrders()} disabled={isLoading}>
-          Refresh list
-        </Button>
-      </div>
-
       {searchHelpOpen ? (
         <Modal title="What can order search find?" onClose={() => setSearchHelpOpen(false)}>
           <p className="text-sm leading-6 text-muted-foreground">
             One search box covers the server-supported fields: the human-readable order
             number (e.g. <span className="font-mono">ORD-2026-000001</span>), the
-            customer&apos;s email or name, and item SKUs. Partial matches work —
-            typing a few characters of any of these narrows the list.
+            customer&apos;s email or name, ordered product names, and item SKUs.
+            Partial matches work — typing a few characters of any of these narrows
+            the list.
           </p>
           <div className="mt-5 flex justify-end">
             <Button variant="secondary" onClick={() => setSearchHelpOpen(false)}>

@@ -2,6 +2,7 @@ const crypto = require("crypto");
 
 const { AppError } = require("../../utils/appError");
 const { logger } = require("../../utils/logger");
+const { prisma } = require("../../config/database");
 const mediaRepository = require("./media.repository");
 const { findProductById, findVariantByIdAndProductId } = require("../products/products.repository");
 const { localStorageAdapter } = require("./storage/local.storage");
@@ -63,15 +64,38 @@ async function uploadImage(productId, file, meta) {
   }
 
   try {
-    const row = await mediaRepository.createImage({
-      productId,
-      variantId: meta.variantId ?? null,
-      filename,
-      storagePath,
-      imageType: IMAGE_TYPE,
-      altText: meta.altText ?? null,
-      sortOrder: meta.sortOrder ?? 0,
-      isPrimary: meta.isPrimary ?? false,
+    const wantPrimary = meta.isPrimary === true;
+    if (!wantPrimary) {
+      const row = await mediaRepository.createImage({
+        productId,
+        variantId: meta.variantId ?? null,
+        filename,
+        storagePath,
+        imageType: IMAGE_TYPE,
+        altText: meta.altText ?? null,
+        sortOrder: meta.sortOrder ?? 0,
+        isPrimary: false,
+      });
+      return toSafeImage(row);
+    }
+    // Product-level single-primary invariant: demoting siblings and
+    // creating the new primary must be atomic so concurrent uploads or a
+    // mid-flight failure can never leave two primaries behind.
+    const row = await prisma.$transaction(async (tx) => {
+      await mediaRepository.demoteOtherImages(productId, null, tx);
+      return mediaRepository.createImage(
+        {
+          productId,
+          variantId: meta.variantId ?? null,
+          filename,
+          storagePath,
+          imageType: IMAGE_TYPE,
+          altText: meta.altText ?? null,
+          sortOrder: meta.sortOrder ?? 0,
+          isPrimary: true,
+        },
+        tx
+      );
     });
     return toSafeImage(row);
   } catch (err) {
@@ -106,6 +130,18 @@ async function updateImageMetadata(productId, imageId, input) {
   }
 
   try {
+    // Product-level single-primary invariant: setting one image primary
+    // must demote every other image of the same product atomically.
+    // Reads/writes for other products are never touched; the pre-check
+    // above (findImageByIdAndProductId) already rejects mismatched
+    // product/image ids with 404 before any write occurs.
+    if (data.isPrimary === true) {
+      const row = await prisma.$transaction(async (tx) => {
+        await mediaRepository.demoteOtherImages(productId, existing.id, tx);
+        return mediaRepository.updateImage(existing.id, data, tx);
+      });
+      return toSafeImage(row);
+    }
     const row = await mediaRepository.updateImage(existing.id, data);
     return toSafeImage(row);
   } catch (err) {

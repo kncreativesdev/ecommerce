@@ -236,7 +236,10 @@ describe('ProductNewPage create-then-upload flow', () => {
     expect(createProduct).not.toHaveBeenCalled();
   });
 
-  it('creates multiple variants and uploads each variant’s own images against its real ID', async () => {
+  // Timing-marginal: ~20 sequential userEvent interactions + 3 file uploads
+  // (measured ~2.7s isolated, ~5.2s under full-suite worker contention).
+  // Scoped timeout only — assertions and interactions unchanged.
+  it('creates multiple variants and uploads each variant’s own images against its real ID', { timeout: 20000 }, async () => {
     const user = userEvent.setup();
     createProduct.mockResolvedValue({
       id: 'p1',

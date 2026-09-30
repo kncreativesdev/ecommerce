@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ProductDetailPage } from '../ProductDetailPage.jsx';
 import { useProductStore } from '../../stores/useProductStore.js';
+import { useCartStore } from '../../stores/useCartStore.js';
 import { fetchProductById, fetchProducts } from '../../services/product.service.js';
 import { fetchProductImages } from '../../services/media.service.js';
 
@@ -16,6 +17,19 @@ vi.mock('../../services/media.service.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, fetchProductImages: vi.fn() };
 });
+
+vi.mock('../../services/reviews.service.js', () => ({
+  fetchMyReviews: vi.fn().mockResolvedValue([]),
+  fetchProductReviews: vi.fn().mockResolvedValue([]),
+  createReview: vi.fn(),
+  fetchReviewById: vi.fn(),
+  updateReview: vi.fn(),
+  deleteReview: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 const PRODUCT = {
   id: 'p1',
@@ -58,10 +72,16 @@ function renderPdp() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
   resetStores();
   fetchProducts.mockResolvedValue([]);
   fetchProductById.mockResolvedValue(PRODUCT);
   fetchProductImages.mockResolvedValue(IMAGES);
+  useCartStore.setState({ bulkPending: false, addItem: vi.fn().mockResolvedValue({ ok: true }) });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('ProductDetailPage variant selection', () => {
@@ -81,5 +101,62 @@ describe('ProductDetailPage variant selection', () => {
     expect(screen.getByText('SKU-B')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Blue' })).toHaveAttribute('aria-pressed', 'true');
     expect(fetchProductImages).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ProductDetailPage Add to Cart confirmation', () => {
+  async function mainAddButtons() {
+    // Main + sticky mobile bar share the same transient state.
+    await screen.findByRole('heading', { name: 'Test Shirt' });
+    return screen.getAllByRole('button', { name: 'Add to Cart' });
+  }
+
+  it('shows Added (disabled) for ~2 seconds after a successful add', async () => {
+    renderPdp();
+    const [main] = await mainAddButtons();
+    vi.useFakeTimers();
+
+    fireEvent.click(main);
+    await act(async () => {});
+    const addedButtons = screen.getAllByRole('button', { name: 'Added' });
+    expect(addedButtons).toHaveLength(2);
+    for (const button of addedButtons) expect(button).toBeDisabled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(screen.getAllByRole('button', { name: 'Add to Cart' })).toHaveLength(2);
+  });
+
+  it('ignores repeat clicks while Added so no duplicate request fires', async () => {
+    const addItem = vi.fn().mockResolvedValue({ ok: true });
+    useCartStore.setState({ bulkPending: false, addItem });
+    renderPdp();
+    const [main] = await mainAddButtons();
+    vi.useFakeTimers();
+
+    fireEvent.click(main);
+    await act(async () => {});
+    const [added] = screen.getAllByRole('button', { name: 'Added' });
+    fireEvent.click(added);
+    expect(addItem).toHaveBeenCalledTimes(1);
+  });
+
+  it('never shows Added when the add fails', async () => {
+    useCartStore.setState({
+      bulkPending: false,
+      addItem: vi.fn().mockResolvedValue({ ok: false, error: { message: 'Could not add to cart.' } }),
+    });
+    renderPdp();
+    const [main] = await mainAddButtons();
+
+    fireEvent.click(main);
+    await waitFor(() => {
+      expect(useCartStore.getState().addItem).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole('button', { name: 'Added' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: 'Add to Cart' })).toHaveLength(2);
+    });
   });
 });

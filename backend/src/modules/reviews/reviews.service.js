@@ -15,6 +15,10 @@ async function createReview(userId, input) {
   }
 
   try {
+    // Customer reviews are visible immediately: created already approved so
+    // no admin step gates customer visibility. Eligibility (ownership via
+    // the order item + one-review-per-product/order-item uniqueness) is
+    // enforced here and by the database constraints below.
     const row = await reviewsRepository.createReview({
       userId,
       productId: orderItem.productId,
@@ -22,6 +26,7 @@ async function createReview(userId, input) {
       rating: input.rating,
       title: input.title ?? null,
       comment: input.comment ?? null,
+      isApproved: true,
     });
     return toSafeReview(row);
   } catch (err) {
@@ -97,32 +102,8 @@ async function listReviewsAdmin(query) {
   };
 }
 
-async function setReviewApprovedAdmin(id, isApproved) {
-  try {
-    const row = await reviewsRepository.setReviewApproved(id, isApproved);
-    return toSafeAdminReview(row);
-  } catch (err) {
-    if (err.code === "P2025") {
-      throw new AppError(404, "REVIEW_NOT_FOUND", "Review not found");
-    }
-    throw err;
-  }
-}
-
-async function deleteReviewAdmin(id) {
-  try {
-    await reviewsRepository.deleteReviewByIdAdmin(id);
-  } catch (err) {
-    if (err.code === "P2025") {
-      throw new AppError(404, "REVIEW_NOT_FOUND", "Review not found");
-    }
-    throw err;
-  }
-  return { id, message: "Review deleted successfully" };
-}
-
 async function listProductReviews(productId) {
-  const rows = await reviewsRepository.findApprovedReviewsByProductId(productId);
+  const rows = await reviewsRepository.findReviewsByProductId(productId);
   return rows.map(toSafePublicReview);
 }
 
@@ -133,7 +114,5 @@ module.exports = {
   updateReview,
   deleteReview,
   listReviewsAdmin,
-  setReviewApprovedAdmin,
-  deleteReviewAdmin,
   listProductReviews,
 };

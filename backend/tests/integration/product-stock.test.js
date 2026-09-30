@@ -76,7 +76,9 @@ beforeAll(async () => {
 }, 90000);
 
 afterAll(async () => {
+  // Product lifecycle cleanup (deactivate first, then delete).
   try {
+    await request(app).patch(`/api/v1/products/${ctx.productId}`).set(adminHeaders()).send({ isActive: false });
     await request(app).delete(`/api/v1/products/${ctx.productId}`).set(adminHeaders());
     await request(app).delete(`/api/v1/categories/${ctx.categoryId}`).set(adminHeaders());
   } catch { /* best-effort */ }

@@ -80,6 +80,17 @@ function toSafeOrderStatusHistory(entry) {
   };
 }
 
+function toSafeOrderCoupon(coupon) {
+  if (!coupon) return null;
+  return {
+    id: coupon.id,
+    code: coupon.code,
+    description: coupon.description ?? null,
+    discountType: coupon.discountType,
+    discountValue: formatDecimal(coupon.discountValue, 2),
+  };
+}
+
 function toSafeOrder(order) {
   return {
     id: order.id,
@@ -87,6 +98,9 @@ function toSafeOrder(order) {
     status: order.status,
     subtotal: formatDecimal(order.subtotal, 2),
     discountTotal: formatDecimal(order.discountTotal, 2),
+    // Applied-coupon brief (null when no coupon was used). Code/definition
+    // identify the coupon; the effective amount stays in `discountTotal`.
+    coupon: toSafeOrderCoupon(order.coupon),
     shippingTotal: formatDecimal(order.shippingTotal, 2),
     taxTotal: formatDecimal(order.taxTotal, 2),
     grandTotal: formatDecimal(order.grandTotal, 2),
@@ -133,6 +147,7 @@ module.exports = {
   toSafeOrderAddress,
   toSafePayment,
   toSafeOrderStatusHistory,
+  toSafeOrderCoupon,
   formatDecimal,
   priceToCents,
   centsToString,

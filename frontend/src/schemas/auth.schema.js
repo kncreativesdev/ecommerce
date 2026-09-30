@@ -26,7 +26,11 @@ export const registerSchema = z
       .string()
       .min(8, 'Password must be at least 8 characters.')
       .max(128, 'Password must be at most 128 characters.'),
-    firstName: z.string().trim().max(100, 'First name is too long.').optional().or(z.literal('')),
+    firstName: z
+      .string()
+      .trim()
+      .min(1, 'First name is required.')
+      .max(100, 'First name is too long.'),
     lastName: z.string().trim().max(100, 'Last name is too long.').optional().or(z.literal('')),
     phone: z.string().trim().max(30, 'Phone number is too long.').optional().or(z.literal('')),
   });

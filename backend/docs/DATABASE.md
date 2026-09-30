@@ -298,6 +298,10 @@ Rules:
 * Product does not directly contain SKU when variants exist.
 * Product does not directly contain the purchasable price when variants are used.
 * Products are normally deactivated instead of physically deleted.
+* Lifecycle rule: an ACTIVE product cannot be deleted (deactivate first).
+  Deactivation (`is_active: true → false`) is allowed only when no
+  in-process order contains the product — order status is the source of
+  truth (`CANCELLED`/`DELIVERED`/`COMPLETED` orders never block).
 
 ---
 
@@ -576,6 +580,7 @@ order_number
 status
 subtotal
 discount_total
+coupon_id      (nullable FK → coupons.id, ON DELETE SET NULL)
 shipping_total
 tax_total
 grand_total
@@ -587,12 +592,13 @@ updated_at
 Relationship:
 
 ```text
-User 1 ──── N Orders
-Order 1 ──── N OrderItems
-Order 1 ──── N OrderAddresses
-Order 1 ──── N Payments
-Order 1 ──── N OrderStatusHistory
-Order 1 ──── N Notifications
+User   1 ──── N Orders
+Coupon 1 ──── N Orders (nullable — orders without a coupon, ON DELETE SET NULL)
+Order  1 ──── N OrderItems
+Order  1 ──── N OrderAddresses
+Order  1 ──── N Payments
+Order  1 ──── N OrderStatusHistory
+Order  1 ──── N Notifications
 ```
 
 Order statuses (migration
@@ -630,6 +636,9 @@ Rules:
 * Money fields use `DECIMAL(10,2)`.
 * `currency` is stored explicitly.
 * Historical order data must remain stable.
+* `coupon_id` records WHICH coupon produced `discount_total` (nullable —
+  orders without a coupon, and legacy pre-link orders, carry null; the
+  amount itself stays snapshotted in `discount_total`).
 
 Example order number:
 
@@ -769,6 +778,12 @@ updated_at
 
 Initial implementation does not integrate an online payment gateway.
 
+Payment `status` values: `PENDING`, `PAID`, `FAILED`, `REFUNDED`,
+`CANCELLED`. `CANCELLED` is written only by the atomic
+order-cancellation transaction (order → `CANCELLED` moves its payments
+to `CANCELLED` in the same transaction); it is terminal and is never
+recorded as `REFUNDED`.
+
 Initial payment method may include:
 
 ```text
@@ -832,7 +847,11 @@ Recommended initial creation rule:
 
 A review should be associated with a verified purchase through `order_item_id`.
 
-`is_approved` controls whether a review is publicly visible.
+`is_approved` is a stored review attribute kept for compatibility. It no
+longer gates customer visibility: reviews are created already approved
+(`is_approved = true`) and the public product listing returns every
+submitted review newest-first with no approval step. Admin review access
+is read-only — no approve/reject/edit/delete workflow exists.
 
 User profile functionality must support:
 
@@ -1137,6 +1156,8 @@ Update order status
 Release inventory
     ↓
 Create inventory transaction
+    ↓
+Move payment record(s) to CANCELLED
 ```
 
 ### Inventory adjustment
@@ -1156,13 +1177,15 @@ Update order status (conditional on expected status)
     ↓
 Restore inventory + ORDER_CANCELLED ledger (CANCELLED only)
     ↓
+Move payment record(s) to CANCELLED (CANCELLED only)
+    ↓
 Append one immutable order_status_history row
     ↓
 Create one ORDER_STATUS customer notification
 ```
 
-Status, history, and notification succeed or roll back together, so
-the three can never silently diverge. Order creation seeds one
+Status, payment, history, and notification succeed or roll back together, so
+the four can never silently diverge. Order creation seeds one
 `PENDING` history row.
 
 ---

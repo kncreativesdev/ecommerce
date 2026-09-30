@@ -5,10 +5,11 @@ import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/apiClient.js';
  * (API_INTEGRATION §12, verified `reviews.routes|validation`):
  * - `POST /reviews { orderItemId, rating 1–5, title?, comment? }` → `201`.
  *   `productId` is derived server-side — never sent. `409` on repeats.
+ *   Created reviews are visible immediately (no admin approval step).
  * - `GET /reviews/me` → own reviews, newest first.
- * - `GET /reviews/product/:productId` → public approved reviews for the
+ * - `GET /reviews/product/:productId` → public product reviews for the
  *   PDP (no auth): `{ id, productId, rating, title, comment, author,
- *   createdAt }[]`. No private customer data.
+ *   createdAt }[]`. No approval gate, no private customer data.
  * - `GET /reviews/:id` → owner-scoped single review.
  * - `PATCH /reviews/:id` → non-empty subset of `{ rating, title, comment }`.
  * - `DELETE /reviews/:id` → hard delete. Repeat → `404`.

@@ -53,7 +53,7 @@ async function registerUser(suffix) {
   const email = `${RUN.toLowerCase()}-${suffix}@example.test`;
   const registered = await request(app)
     .post("/api/v1/auth/register")
-    .send({ email, password: "TestPass123!", firstName: "Address", lastName: suffix });
+    .send({ email, password: "TestPass123!", firstName: "Address", lastName: suffix, phone: "9999999999" });
   expect(registered.status).toBe(201);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
@@ -98,6 +98,10 @@ beforeAll(async () => {
 }, 60000);
 
 afterAll(async () => {
+  // Product lifecycle cleanup (deactivate first, then delete).
+  try {
+    await request(app).patch(`/api/v1/products/${ctx.productId}`).set(adminHeaders()).send({ isActive: false });
+  } catch { /* best-effort */ }
   try {
     await request(app).delete(`/api/v1/products/${ctx.productId}`).set(adminHeaders());
   } catch { /* best-effort */ }

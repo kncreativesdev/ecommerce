@@ -172,13 +172,18 @@ contracts). Catalog filtering/sorting/search is client-side over the
 
 ## 14. Order Detail — `/account/orders/:id` (PROTECTED)
 
-- **Purpose**: immutable snapshot view + review entry points.
+- **Purpose**: immutable snapshot view + review entry points + confirmed
+  self-cancellation of eligible orders.
 - **Sections**: header (orderNumber, date, status timeline display-only),
-  items (snapshot names/sku/prices/qty/line totals + "Write a review" per
-  order item when unreviewed), shipping/billing snapshots, payment snapshot
+  order actions (Cancel Order only when `PENDING|CONFIRMED|PROCESSING`,
+  behind a cannot-be-undone confirmation), items (snapshot names/sku/
+  prices/qty/line totals + "Write a review" per order item when
+  unreviewed), shipping/billing snapshots, payment snapshot
   (COD/PENDING/INR), totals.
-- **APIs**: `GET /orders/:id` (+ `GET /reviews/me` to mark reviewed items).
-- **Error**: `404 ORDER_NOT_FOUND` → not-found. No mutation UI.
+- **APIs**: `GET /orders/:id` (+ `GET /reviews/me` to mark reviewed items),
+  `POST /orders/:id/cancel` for eligible orders.
+- **Error**: `404 ORDER_NOT_FOUND` → not-found. `409` on ineligible
+  cancellation → backend message, order state preserved.
 
 ## 15. My Reviews — `/account/reviews` (PROTECTED)
 

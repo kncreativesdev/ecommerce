@@ -60,25 +60,12 @@ const adminReviewListQuerySchema = z
   })
   .strip();
 
-/**
- * Admin moderation mutation. The moderation model is the actual
- * `isApproved` boolean (no invented enum): `true` approves/publishes,
- * `false` rejects back to pending. Rejected reviews stay stored and
- * discoverable via the `isApproved=false` filter.
- */
-const updateReviewApprovedSchema = z
-  .object({
-    isApproved: z.boolean(),
-  })
-  .strict();
-
 module.exports = {
   createReviewSchema,
   updateReviewSchema,
   reviewIdParamSchema,
   productIdParamSchema,
   adminReviewListQuerySchema,
-  updateReviewApprovedSchema,
   MIN_RATING,
   MAX_RATING,
   MAX_TITLE_LENGTH,

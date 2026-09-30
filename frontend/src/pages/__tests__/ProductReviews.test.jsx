@@ -83,4 +83,16 @@ describe('PDP customer reviews (backend truth)', () => {
     expect(await screen.findByText(/No reviews yet/i)).toBeInTheDocument();
     expect(fetchProductReviews).toHaveBeenCalledWith('p1');
   });
+
+  it('renders every backend review immediately (no client-side approval filter)', async () => {
+    fetchProductReviews.mockResolvedValue([
+      { id: 'r1', productId: 'p1', rating: 5, title: 'Excellent', comment: 'Works great', author: 'Aarav S.', createdAt: '2026-09-10T10:00:00.000Z' },
+      { id: 'r2', productId: 'p1', rating: 4, title: 'Good value', comment: 'Does the job', author: 'Diya P.', createdAt: '2026-09-09T10:00:00.000Z' },
+    ]);
+    renderPdp();
+    expect(await screen.findByText('Excellent')).toBeInTheDocument();
+    expect(screen.getByText('Good value')).toBeInTheDocument();
+    expect(screen.getByText('Diya P.')).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/out of 5/)).toHaveLength(2);
+  });
 });

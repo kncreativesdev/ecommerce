@@ -11,15 +11,16 @@ import { prisma } from "../../src/config/database.js";
  * - GET /users, GET /users/:id, PATCH /users/:id (ADMIN-only, safe
  *   fields, search/isActive/pagination/sort, activate/deactivate with
  *   login gating)
- * - GET /reviews/admin, PATCH /reviews/admin/:id, DELETE
- *   /reviews/admin/:id (ADMIN-only, filters, approve/reject via the real
- *   isApproved boolean, hard delete without touching orders)
+ * - GET /reviews/admin (ADMIN-only, read-only, filters). Admin review
+ *   access is strictly read-only: PATCH/DELETE /reviews/admin/:id do not
+ *   exist (404) — customer reviews are visible without approval and
+ *   admins must not mutate them.
  * - Customer review flow is unaffected by moderation state.
  *
  * No user-deletion endpoint exists by design, so registered test users
  * stay as ordinary active rows (same convention as the existing
  * integration suites). Catalog rows are DEACTIVATED afterwards; the test
- * review is removed through the real admin DELETE endpoint.
+ * review is removed through the owner's customer DELETE endpoint.
  */
 
 const RUN = `TSTUR${Date.now().toString(36).toUpperCase()}`;
@@ -49,6 +50,7 @@ async function registerAndLogin(firstName) {
     password: "TestPass123!",
     firstName,
     lastName: "Tester",
+    phone: "9999999999",
   });
   expect(registered.status).toBe(201);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
@@ -122,13 +124,18 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try {
+    // Owner-scoped customer delete (admin review mutation no longer exists).
     if (ctx.reviewId) {
-      await request(app).delete(`/api/v1/reviews/admin/${ctx.reviewId}`).set(adminHeaders());
+      await request(app)
+        .delete(`/api/v1/reviews/${ctx.reviewId}`)
+        .set({ Authorization: `Bearer ${ctx.customerA.token}` });
     }
   } catch { /* best-effort */ }
   try {
     // Lifecycle target must be left active (login gating is asserted
     // mid-suite with reactivation inside the test itself).
+    // Product lifecycle cleanup (deactivate first, then delete).
+    await request(app).patch(`/api/v1/products/${ctx.productId}`).set(adminHeaders()).send({ isActive: false });
     await request(app).delete(`/api/v1/products/${ctx.productId}`).set(adminHeaders());
     await request(app).delete(`/api/v1/categories/${ctx.categoryId}`).set(adminHeaders());
   } catch { /* best-effort */ }
@@ -262,24 +269,25 @@ describe("admin user lifecycle", () => {
   });
 });
 
-describe("admin review moderation", () => {
-  it("rejects anonymous and customer-role access", async () => {
+describe("admin review read-only access", () => {
+  it("rejects anonymous and customer-role list access; mutation routes do not exist", async () => {
     const anonymous = await request(app).get("/api/v1/reviews/admin");
     expect(anonymous.status).toBe(401);
 
     const customerList = await request(app).get("/api/v1/reviews/admin").set(customerAHeaders());
     expect(customerList.status).toBe(403);
 
+    // No admin mutation route exists for any caller (404, not 403).
     const customerPatch = await request(app)
       .patch(`/api/v1/reviews/admin/${ctx.reviewId}`)
       .set(customerAHeaders())
       .send({ isApproved: true });
-    expect(customerPatch.status).toBe(403);
+    expect(customerPatch.status).toBe(404);
 
     const customerDelete = await request(app)
       .delete(`/api/v1/reviews/admin/${ctx.reviewId}`)
       .set(customerAHeaders());
-    expect(customerDelete.status).toBe(403);
+    expect(customerDelete.status).toBe(404);
   });
 
   it("lists reviews with customer, product, and order-item linkage", async () => {
@@ -291,7 +299,8 @@ describe("admin review moderation", () => {
     expect(row).toMatchObject({
       rating: 5,
       title: `${RUN} Excellent`,
-      isApproved: false,
+      // Customer reviews are visible immediately (created approved).
+      isApproved: true,
     });
     expect(row.customer).toMatchObject({ id: ctx.customerA.id, email: ctx.customerA.email });
     expect(row.customer).not.toHaveProperty("passwordHash");
@@ -300,14 +309,14 @@ describe("admin review moderation", () => {
   });
 
   it("supports status, rating, product, customer, and search filters", async () => {
-    const pending = await request(app).get("/api/v1/reviews/admin?isApproved=false").set(adminHeaders());
-    expect(pending.status).toBe(200);
-    expect(pending.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(true);
-    expect(pending.body.data.reviews.every((review) => review.isApproved === false)).toBe(true);
-
     const approved = await request(app).get("/api/v1/reviews/admin?isApproved=true").set(adminHeaders());
     expect(approved.status).toBe(200);
-    expect(approved.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(false);
+    expect(approved.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(true);
+    expect(approved.body.data.reviews.every((review) => review.isApproved === true)).toBe(true);
+
+    const pending = await request(app).get("/api/v1/reviews/admin?isApproved=false").set(adminHeaders());
+    expect(pending.status).toBe(200);
+    expect(pending.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(false);
 
     const byRating = await request(app).get("/api/v1/reviews/admin?rating=5").set(adminHeaders());
     expect(byRating.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(true);
@@ -330,26 +339,24 @@ describe("admin review moderation", () => {
     expect(bySearch.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(true);
   });
 
-  it("approves and rejects via the isApproved boolean (rejected rows stay listed)", async () => {
+  it("is read-only: admin approve/reject endpoints do not exist", async () => {
     const approved = await request(app)
       .patch(`/api/v1/reviews/admin/${ctx.reviewId}`)
       .set(adminHeaders())
       .send({ isApproved: true });
-    expect(approved.status).toBe(200);
-    expect(approved.body.data.review).toMatchObject({ id: ctx.reviewId, isApproved: true });
-
-    const listed = await request(app).get("/api/v1/reviews/admin?isApproved=true").set(adminHeaders());
-    expect(listed.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(true);
+    expect(approved.status).toBe(404);
+    expect(approved.body.error.code).toBe("ROUTE_NOT_FOUND");
 
     const rejected = await request(app)
       .patch(`/api/v1/reviews/admin/${ctx.reviewId}`)
       .set(adminHeaders())
       .send({ isApproved: false });
-    expect(rejected.status).toBe(200);
-    expect(rejected.body.data.review.isApproved).toBe(false);
+    expect(rejected.status).toBe(404);
+    expect(rejected.body.error.code).toBe("ROUTE_NOT_FOUND");
 
-    const stillListed = await request(app).get("/api/v1/reviews/admin?isApproved=false").set(adminHeaders());
-    expect(stillListed.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(true);
+    // The review is untouched and still listed as approved.
+    const listed = await request(app).get("/api/v1/reviews/admin?isApproved=true").set(adminHeaders());
+    expect(listed.body.data.reviews.some((review) => review.id === ctx.reviewId)).toBe(true);
   });
 
   it("leaves the customer flow untouched by moderation state", async () => {
@@ -358,31 +365,32 @@ describe("admin review moderation", () => {
     expect(mine.body.data.some((review) => review.id === ctx.reviewId)).toBe(true);
   });
 
-  it("rejects bad moderation input and unknown reviews", async () => {
-    const empty = await request(app).patch(`/api/v1/reviews/admin/${ctx.reviewId}`).set(adminHeaders()).send({});
-    expect(empty.status).toBe(422);
-
+  it("has no admin mutation routes for unknown or malformed ids either", async () => {
     const missing = await request(app)
       .patch("/api/v1/reviews/admin/00000000-0000-0000-0000-000000000000")
       .set(adminHeaders())
       .send({ isApproved: true });
     expect(missing.status).toBe(404);
-    expect(missing.body.error.code).toBe("REVIEW_NOT_FOUND");
+    expect(missing.body.error.code).toBe("ROUTE_NOT_FOUND");
 
     const invalid = await request(app)
-      .patch("/api/v1/reviews/admin/not-a-uuid")
-      .set(adminHeaders())
-      .send({ isApproved: true });
-    expect(invalid.status).toBe(422);
+      .delete("/api/v1/reviews/admin/not-a-uuid")
+      .set(adminHeaders());
+    expect(invalid.status).toBe(404);
+    expect(invalid.body.error.code).toBe("ROUTE_NOT_FOUND");
   });
 
-  it("hard-deletes without touching order records", async () => {
-    const removed = await request(app).delete(`/api/v1/reviews/admin/${ctx.reviewId}`).set(adminHeaders());
+  it("has no admin delete: the owner customer delete leaves orders intact", async () => {
+    const adminDelete = await request(app).delete(`/api/v1/reviews/admin/${ctx.reviewId}`).set(adminHeaders());
+    expect(adminDelete.status).toBe(404);
+    expect(adminDelete.body.error.code).toBe("ROUTE_NOT_FOUND");
+
+    const removed = await request(app).delete(`/api/v1/reviews/${ctx.reviewId}`).set(customerAHeaders());
     expect(removed.status).toBe(200);
     expect(removed.body.data.id).toBe(ctx.reviewId);
     ctx.reviewId = null;
 
-    const repeat = await request(app).delete(`/api/v1/reviews/admin/${ctx.orderItemId}`).set(adminHeaders());
+    const repeat = await request(app).delete(`/api/v1/reviews/${ctx.orderItemId}`).set(customerAHeaders());
     expect(repeat.status).toBe(404);
 
     const listed = await request(app).get("/api/v1/reviews/admin").set(adminHeaders());

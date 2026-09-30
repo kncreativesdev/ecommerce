@@ -5,7 +5,6 @@ const {
   reviewIdParamSchema,
   productIdParamSchema,
   adminReviewListQuerySchema,
-  updateReviewApprovedSchema,
 } = require("./reviews.validation");
 
 async function create(req, res, next) {
@@ -68,27 +67,6 @@ async function listAdmin(req, res, next) {
   }
 }
 
-async function updateApprovedAdmin(req, res, next) {
-  try {
-    const params = reviewIdParamSchema.parse({ id: req.params.id });
-    const input = updateReviewApprovedSchema.parse(req.body);
-    const review = await reviewsService.setReviewApprovedAdmin(params.id, input.isApproved);
-    return res.status(200).json({ success: true, data: { review } });
-  } catch (err) {
-    return next(err);
-  }
-}
-
-async function removeAdmin(req, res, next) {
-  try {
-    const params = reviewIdParamSchema.parse({ id: req.params.id });
-    const result = await reviewsService.deleteReviewAdmin(params.id);
-    return res.status(200).json({ success: true, data: result });
-  } catch (err) {
-    return next(err);
-  }
-}
-
 async function listByProduct(req, res, next) {
   try {
     const params = productIdParamSchema.parse({ productId: req.params.productId });
@@ -99,4 +77,4 @@ async function listByProduct(req, res, next) {
   }
 }
 
-module.exports = { create, listMine, getById, update, remove, listAdmin, updateApprovedAdmin, removeAdmin, listByProduct };
+module.exports = { create, listMine, getById, update, remove, listAdmin, listByProduct };

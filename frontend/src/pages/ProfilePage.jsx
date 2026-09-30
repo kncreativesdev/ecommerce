@@ -9,6 +9,7 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { useSession } from '../hooks/useSession.js';
 import { fetchProfile, updateProfile } from '../services/users.service.js';
 import { applyServerErrors } from '../lib/formValidation.js';
+import { useAuthStore } from '../stores/useAuthStore.js';
 
 /**
  * Profile (`/account/profile`, protected): view/edit own profile. Email is
@@ -78,6 +79,10 @@ export function ProfilePage() {
         phone: values.phone,
       });
       setProfile(updated);
+      // Keep the session mirror authoritative: checkout and other
+      // phone-aware flows read `useAuthStore.user`, so a saved phone must
+      // be visible immediately without a logout/login cycle.
+      useAuthStore.setState({ user: updated ?? null });
       reset({
         firstName: updated?.firstName ?? '',
         lastName: updated?.lastName ?? '',

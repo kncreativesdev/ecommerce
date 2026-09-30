@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   ORDER_STATUS_TRANSITIONS,
   ORDER_STATUS_SEQUENCE,
+  ORDER_IN_PROCESS_STATUSES,
   PAYMENT_STATUS_TRANSITIONS,
   normalizeLifecycleStatus,
   orderStatusNotification,
@@ -92,13 +93,44 @@ describe("order state machine", () => {
     expect(normalizeLifecycleStatus("DELIVERED")).toBe("DELIVERED");
   });
 
-  it("leaves the COD payment machine untouched", () => {
+  it("keeps CANCELLED and REFUNDED terminal in the COD payment machine", () => {
     expect(PAYMENT_STATUS_TRANSITIONS).toEqual({
       PENDING: ["PAID", "FAILED"],
       FAILED: ["PAID"],
       PAID: ["REFUNDED"],
       REFUNDED: [],
+      // Written only by the atomic order-cancellation transaction; the
+      // standalone payment-status endpoint can never produce or leave it.
+      CANCELLED: [],
     });
+  });
+
+  it("defines the in-process order set for product deactivation eligibility", () => {
+    // Terminal history never blocks: cancelled orders stop blocking, and
+    // fulfilled (delivered/completed) orders are history, not process.
+    expect(ORDER_IN_PROCESS_STATUSES).not.toContain("CANCELLED");
+    expect(ORDER_IN_PROCESS_STATUSES).not.toContain("DELIVERED");
+    expect(ORDER_IN_PROCESS_STATUSES).not.toContain("COMPLETED");
+    // Everything genuinely still in process blocks — including legacy
+    // SHIPPED, which still moves forward via the compatibility path.
+    for (const status of [
+      "PENDING",
+      "CONFIRMED",
+      "PROCESSING",
+      "DISPATCHED",
+      "SHIPPED",
+      "IN_TRANSIT",
+      "ARRIVED_IN_CITY",
+      "OUT_FOR_DELIVERY",
+    ]) {
+      expect(ORDER_IN_PROCESS_STATUSES).toContain(status);
+    }
+    // Derived from the canonical transition map — never a second definition.
+    expect([...ORDER_IN_PROCESS_STATUSES].sort()).toEqual(
+      Object.keys(ORDER_STATUS_TRANSITIONS)
+        .filter((status) => !["CANCELLED", "DELIVERED", "COMPLETED"].includes(status))
+        .sort()
+    );
   });
 });
 

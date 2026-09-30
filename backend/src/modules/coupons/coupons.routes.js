@@ -15,6 +15,7 @@ router.post("/validate", authenticate, couponsController.validateForCart);
 // the internal validation/consumption service stays checkout-agnostic).
 router.get("/", authenticate, authorize("ADMIN"), couponsController.list);
 router.get("/:id", authenticate, authorize("ADMIN"), couponsController.getById);
+router.get("/:id/history", authenticate, authorize("ADMIN"), couponsController.history);
 router.post("/", authenticate, authorize("ADMIN"), couponsController.create);
 router.patch("/:id", authenticate, authorize("ADMIN"), couponsController.update);
 router.delete("/:id", authenticate, authorize("ADMIN"), couponsController.remove);

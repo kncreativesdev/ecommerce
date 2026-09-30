@@ -69,6 +69,21 @@ attach as bearer; bootstrap `GET /auth/me`, cart, wishlist.
 Errors: `401 AUTH_INVALID_CREDENTIALS` (form-level); `403
 AUTH_ACCOUNT_INACTIVE` ("account disabled, contact support"); `422`; `429`.
 
+### 2.2b Google sign-in — `POST /auth/google` (PUBLIC) → `200`
+
+Request: `{ "idToken" }` (Google Identity Services ID token from the
+Continue-with-Google button; requires `VITE_GOOGLE_CLIENT_ID`
+storefront-side and `GOOGLE_CLIENT_ID` server-side).
+Response: same session shape as password login (`data.user` +
+`data.accessToken` + refresh cookie); existing accounts link by verified
+email, new ones are created as `CUSTOMER`. Frontend usage identical to
+§2.2 after the token is received. NOTE (temporary product decision): the
+Continue with Google UI is currently hidden from the Sign In/Sign Up
+pages — the endpoint, store action (`loginWithGoogle`), GIS utilities,
+and configuration above stay intact for re-enablement.
+Errors: `401 AUTH_GOOGLE_INVALID_TOKEN`; `403 AUTH_ACCOUNT_INACTIVE`;
+`422`; `429`; `503 AUTH_GOOGLE_NOT_CONFIGURED` (backend unconfigured).
+
 ### 2.3 Refresh — `POST /auth/refresh` (COOKIE) → `200`
 
 Request: no body; cookie sent automatically (`credentials: "include"`).
@@ -216,8 +231,10 @@ Never accepted: `userId`, `orderNumber`, `status`, any totals/prices,
 `paymentStatus`, `method`, coupon/discount fields, unknown fields.
 
 Response: `data.order = { id (UUID), orderNumber, status: "PENDING",
-subtotal/discountTotal/shippingTotal/taxTotal/grandTotal (strings), currency:
-"INR", items[] snapshots ({ id, productName, variantName, sku, unitPrice,
+subtotal/discountTotal/shippingTotal/taxTotal/grandTotal (strings), coupon
+(`{ id, code, description, discountType, discountValue }`, `null` when no
+coupon was used — the amount stays in `discountTotal`), currency:
+"INR", items[] snapshots ({ id, productId, productName, variantName, sku, unitPrice,
 discount, quantity, lineTotal }), addresses[] ({ SHIPPING } + optional
 { BILLING } snapshots), payments[] ({ method: "CASH_ON_DELIVERY", status:
 "PENDING", amount = grand total, currency: "INR" }) }`.
@@ -237,6 +254,13 @@ order-history list; render snapshots only.
 Owner-scoped single order (`data.order`). Other users' ids → `404
 ORDER_NOT_FOUND` → "order not found" UI.
 
+### 11.4 Customer cancellation — `POST /orders/:id/cancel` (BEARER, UUID) → `200`
+
+Cancels the caller's own order (`data.order`) when still cancellable
+(`PENDING|CONFIRMED|PROCESSING` per the lifecycle; anything else →
+`409 ORDER_INVALID_STATUS_TRANSITION`). Other users' ids → `404
+ORDER_NOT_FOUND`. Same atomic effects as an admin cancellation.
+
 ## 12. Reviews (BEARER, owner-scoped; creation = verified purchase only)
 
 Review shape: `data.review(s) = { id, productId, orderItemId, rating, title,
@@ -249,6 +273,7 @@ comment, isApproved, product brief }`. No user/order data embedded.
 | `GET /reviews/:id` (UUID) | — | `200` | Owner-scoped; others → `404 REVIEW_NOT_FOUND` |
 | `PATCH /reviews/:id` | non-empty subset of `{ rating, title, comment }` | `200` | `422 REVIEW_UPDATE_INVALID` on empty/unknown |
 | `DELETE /reviews/:id` | — | `200` | Hard delete; repeat → `404` |
+| `GET /reviews/product/:productId` (public, no auth) | — | `200` | Product reviews newest-first; no approval gate, no private data → PDP list |
 
 ## 13. Payments / COD — NO customer HTTP surface
 
@@ -283,12 +308,15 @@ return `404 ROUTE_NOT_FOUND`). Do not design, call, or promise these:
    empty carts persist (never deleted server-side).
 3. **No online payment provider** — no Razorpay/Stripe/UPI/card endpoints,
    no capture/refund, no webhooks, no payment mutation. COD only.
-4. **No customer order-cancellation endpoint** — no status mutation of any
-   kind. `CANCELLED` exists only as a data-model status value.
-5. **No public review listing or aggregates** — no "reviews for product X",
-   no rating averages/distributions, no moderation/approval endpoints.
-   Only: create-from-own-order-item, `GET /reviews/me`, own `GET/PATCH/DELETE
-   /reviews/:id`.
+4. **Customer order cancellation is `POST /orders/:id/cancel` only** —
+   no other status mutation of any kind. `CANCELLED` is reachable only
+   from `PENDING|CONFIRMED|PROCESSING` (backend-enforced).
+5. **No review aggregates or approval endpoints** — no rating
+   averages/distributions, no moderation/approval endpoints. Customer
+   reviews are created visible immediately; the PDP listing
+   (`GET /reviews/product/:productId`) has no approval gate. Only:
+   create-from-own-order-item, `GET /reviews/me`, own `GET/PATCH/DELETE
+   /reviews/:id`, public product listing.
 6. **No coupon API** — coupons exist only as an internal
    validation/discount service with no HTTP surface and no checkout
    integration. No coupon list/validate/apply UI.

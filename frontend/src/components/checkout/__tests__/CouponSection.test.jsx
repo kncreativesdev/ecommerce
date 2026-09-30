@@ -94,7 +94,32 @@ describe('CouponSection', () => {
     expect(screen.queryByText('OLD')).not.toBeInTheDocument();
     expect(useCheckoutStore.getState().appliedCoupon).toBeNull();
   });
+});
 
+describe('CouponSection Apply emphasis', () => {
+  it('styles Apply as the primary action so entering a code alone is not mistaken for applying', async () => {
+    const user = userEvent.setup();
+    render(<CouponSection />);
+
+    const input = screen.getByLabelText('Coupon code');
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    // Input + Apply read as one action group.
+    expect(input.parentElement).toBe(apply.parentElement);
+    // Primary (not low-emphasis secondary) styling.
+    expect(apply.className).toMatch(/bg-primary/);
+    expect(apply.className).not.toMatch(/bg-secondary/);
+    // Helper copy makes the two-step action explicit.
+    expect(screen.getByText(/then click/i)).toBeInTheDocument();
+
+    // Typing alone applies nothing — the existing action still requires Apply.
+    await user.type(input, 'SAVE10');
+    expect(validateCoupon).not.toHaveBeenCalled();
+    await user.click(apply);
+    expect(validateCoupon).toHaveBeenCalledWith('SAVE10');
+  });
+});
+
+describe('CouponSection removal', () => {
   it('removes an applied coupon', async () => {
     const user = userEvent.setup();
     useCheckoutStore.setState({ appliedCoupon: quoteFixture() });

@@ -157,3 +157,51 @@ describe('OrdersPage row visuals (snapshot data only)', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 });
+
+describe('OrdersPage header refresh', () => {
+  it('offers a single top-right Refresh button that re-fetches the list', async () => {
+    const user = userEvent.setup();
+    fetchOrdersAdmin.mockResolvedValue({
+      orders: [orderFixture()],
+      pagination: { page: 1, limit: ORDER_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderOrders();
+    await screen.findByText('ORD-2026-000001');
+
+    expect(screen.getAllByRole('button', { name: 'Refresh' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Refresh list' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(fetchOrdersAdmin).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('OrdersPage product-name search', () => {
+  it('sends the typed query to the server search (covering product names)', async () => {
+    const user = userEvent.setup();
+    fetchOrdersAdmin.mockResolvedValue({
+      orders: [orderFixture()],
+      pagination: { page: 1, limit: ORDER_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderOrders();
+    await screen.findByText('ORD-2026-000001');
+
+    await user.type(screen.getByLabelText('Search orders by order number, customer, product, or SKU'), 'widget');
+    await user.keyboard('{Enter}');
+    expect(fetchOrdersAdmin).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'widget' }));
+  });
+
+  it('documents product names as searchable in the search help', async () => {
+    const user = userEvent.setup();
+    fetchOrdersAdmin.mockResolvedValue({
+      orders: [orderFixture()],
+      pagination: { page: 1, limit: ORDER_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderOrders();
+    await screen.findByText('ORD-2026-000001');
+
+    await user.click(screen.getByRole('button', { name: 'What can order search find?' }));
+    expect(await screen.findByRole('dialog', { name: 'What can order search find?' })).toBeInTheDocument();
+    expect(screen.getByText(/ordered product names/)).toBeInTheDocument();
+  });
+});

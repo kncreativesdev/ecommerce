@@ -81,7 +81,15 @@ export function CustomersPage() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Customers" meta={meta} />
+      <PageHeader
+        title="Customers"
+        meta={meta}
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => refreshCustomers()} disabled={isLoading}>
+            Refresh
+          </Button>
+        }
+      />
 
       {!isLoading && !error && (
         <div className="flex flex-col gap-3">
@@ -234,12 +242,6 @@ export function CustomersPage() {
           />
         </>
       )}
-
-      <div className="flex justify-start">
-        <Button variant="secondary" onClick={() => refreshCustomers()} disabled={isLoading}>
-          Refresh list
-        </Button>
-      </div>
 
       {searchHelpOpen ? (
         <Modal title="What can customer search find?" onClose={() => setSearchHelpOpen(false)}>

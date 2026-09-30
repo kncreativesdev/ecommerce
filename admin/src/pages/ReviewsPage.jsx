@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Search, Star, Trash2, X } from 'lucide-react';
-import { toast } from 'sonner';
+import { Search, Star, X } from 'lucide-react';
 import { useReviewStore } from '../stores/useReviewStore.js';
 import { Button } from '../components/ui/Button.jsx';
 import { EmptyState } from '../components/ui/EmptyState.jsx';
@@ -17,16 +16,13 @@ import { formatDate } from '../lib/format.js';
  * `GET /reviews/admin`. Filtering/sorting/pagination are SERVER-driven —
  * every control maps to a documented query param
  * (`search/isApproved/rating/sortOrder`); the store refetches on each
- * change. No invented params, no client-side slicing, no invented
- * moderation enum.
+ * change. No invented params, no client-side slicing.
  *
- * Moderation writes the actual `isApproved` boolean: Approve sets it
- * `true`, Reject sets it `false` (rejected rows stay stored and remain
- * discoverable under the Pending filter — rejection is never deletion).
- * Delete is a confirmed hard delete of the review row only (order
- * records are never touched). Every mutation reconciles from the
- * authoritative server response with per-row pending states and toasts;
- * the browser never reloads.
+ * Strictly VIEW-ONLY: the page renders review details (rating, text,
+ * product, customer, status, submitted date) and never offers approve,
+ * reject, edit, delete, or status-change controls. No mutation request
+ * can be triggered from this page — the backend exposes no admin review
+ * mutation endpoints.
  */
 const REVIEW_COLUMNS = [
   { key: 'review', label: 'Review' },
@@ -34,7 +30,6 @@ const REVIEW_COLUMNS = [
   { key: 'customer', label: 'Customer' },
   { key: 'status', label: 'Status' },
   { key: 'created', label: 'Submitted' },
-  { key: 'actions', label: 'Actions', numeric: true },
 ];
 
 const selectClass =
@@ -55,16 +50,11 @@ export function ReviewsPage() {
   const setPage = useReviewStore((state) => state.setPage);
   const clearFilters = useReviewStore((state) => state.clearFilters);
   const ensureReviews = useReviewStore((state) => state.ensureReviews);
-  const setApproved = useReviewStore((state) => state.setApproved);
-  const removeReview = useReviewStore((state) => state.removeReview);
 
   // Search input is local until submitted (avoids a request per keystroke);
   // every other control applies immediately via the store (server fetch).
   const [searchDraft, setSearchDraft] = useState(filters.search ?? '');
   const [searchHelpOpen, setSearchHelpOpen] = useState(false);
-  const [deleting, setDeleting] = useState(null);
-  const [mutating, setMutating] = useState(false);
-  const [pendingId, setPendingId] = useState(null);
 
   useEffect(() => {
     document.title = 'Reviews — Tech Pulse Admin';
@@ -87,51 +77,21 @@ export function ReviewsPage() {
     refreshReviews({ filters: { ...filters, ...patch } });
   };
 
-  const handleModerate = async (review, isApproved) => {
-    if (!review?.id || pendingId) return;
-    setPendingId(review.id);
-    try {
-      await setApproved(review.id, isApproved);
-      toast.success(isApproved ? 'Review approved.' : 'Review rejected — it stays listed under Pending.');
-    } catch (moderateError) {
-      if (moderateError?.status === 404 || moderateError?.code === 'REVIEW_NOT_FOUND') {
-        toast.success('Review already gone — list refreshed.');
-        refreshReviews();
-      } else {
-        toast.error(moderateError?.message ?? 'Moderation failed. Please try again.');
-      }
-    } finally {
-      setPendingId(null);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deleting?.id || mutating) return;
-    setMutating(true);
-    try {
-      await removeReview(deleting.id);
-      toast.success('Review deleted. The order record is untouched.');
-      setDeleting(null);
-    } catch (deleteError) {
-      if (deleteError?.status === 404 || deleteError?.code === 'REVIEW_NOT_FOUND') {
-        toast.success('Review already deleted.');
-        setDeleting(null);
-        refreshReviews();
-      } else {
-        toast.error(deleteError?.message ?? 'Delete failed. Please try again.');
-      }
-    } finally {
-      setMutating(false);
-    }
-  };
-
   const meta = isLoading
     ? 'Loading reviews…'
     : `${pagination.total} ${pagination.total === 1 ? 'review' : 'reviews'}`;
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Reviews" meta={meta} />
+      <PageHeader
+        title="Reviews"
+        meta={meta}
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => refreshReviews()} disabled={isLoading}>
+            Refresh
+          </Button>
+        }
+      />
 
       {!isLoading && !error && (
         <div className="flex flex-col gap-3">
@@ -252,7 +212,7 @@ export function ReviewsPage() {
         <EmptyState
           icon={Star}
           title="No reviews yet"
-          message="Customer reviews submitted from order history will appear here for moderation."
+          message="Customer reviews submitted from order history will appear here."
         />
       ) : reviews.length === 0 ? (
         <EmptyState
@@ -262,89 +222,44 @@ export function ReviewsPage() {
         />
       ) : (
         <>
-          <Table caption="Customer reviews" columns={REVIEW_COLUMNS} minWidth="min-w-[980px]">
-            {reviews.map((review) => {
-              const pending = pendingId === review.id;
-              return (
-                <tr key={review.id} className="transition-colors hover:bg-surface-muted/50">
-                  <td className="max-w-sm px-4 py-3">
-                    <span className="flex items-center gap-2">
-                      <RatingStars rating={review.rating} />
-                      <span className="text-xs font-semibold tabular-nums text-muted-foreground">
-                        {review.rating}/5
-                      </span>
+          <Table caption="Customer reviews" columns={REVIEW_COLUMNS} minWidth="min-w-[860px]">
+            {reviews.map((review) => (
+              <tr key={review.id} className="transition-colors hover:bg-surface-muted/50">
+                <td className="max-w-sm px-4 py-3">
+                  <span className="flex items-center gap-2">
+                    <RatingStars rating={review.rating} />
+                    <span className="text-xs font-semibold tabular-nums text-muted-foreground">
+                      {review.rating}/5
                     </span>
-                    <p className="mt-1 truncate font-semibold text-foreground">{reviewTitle(review)}</p>
-                    {review.comment ? (
-                      <p className="truncate text-xs text-muted-foreground">{review.comment}</p>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-foreground">{review.product?.name ?? '—'}</p>
-                    {review.orderItem?.orderId ? (
-                      <p className="truncate font-mono text-xs text-muted-foreground">
-                        item {review.orderItem.id.slice(0, 8)}…
-                      </p>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-foreground">
-                      {[review.customer?.firstName, review.customer?.lastName]
-                        .filter((part) => typeof part === 'string' && part.trim() !== '')
-                        .join(' ')
-                        .trim() || '—'}
+                  </span>
+                  <p className="mt-1 truncate font-semibold text-foreground">{reviewTitle(review)}</p>
+                  {review.comment ? (
+                    <p className="truncate text-xs text-muted-foreground">{review.comment}</p>
+                  ) : null}
+                </td>
+                <td className="px-4 py-3">
+                  <p className="font-medium text-foreground">{review.product?.name ?? '—'}</p>
+                  {review.orderItem?.orderId ? (
+                    <p className="truncate font-mono text-xs text-muted-foreground">
+                      item {review.orderItem.id.slice(0, 8)}…
                     </p>
-                    <p className="truncate text-xs text-muted-foreground">{review.customer?.email ?? '—'}</p>
-                  </td>
-                  <td className="px-4 py-3">
-                    <ReviewStatusBadge isApproved={review.isApproved} />
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatDate(review.createdAt)}</td>
-                  <td className="px-4 py-3">
-                    <span className="flex items-center justify-end gap-1">
-                      {review.isApproved ? (
-                        <button
-                          type="button"
-                          onClick={() => handleModerate(review, false)}
-                          disabled={pending}
-                          aria-label={`Reject review by ${review.customer?.email ?? 'customer'}`}
-                          title="Reject (back to pending)"
-                          className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-warning/15 hover:text-warning disabled:cursor-wait disabled:opacity-60"
-                        >
-                          <X size={17} aria-hidden="true" />
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleModerate(review, true)}
-                          disabled={pending}
-                          aria-label={`Approve review by ${review.customer?.email ?? 'customer'}`}
-                          title="Approve"
-                          className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-success/15 hover:text-success disabled:cursor-wait disabled:opacity-60"
-                        >
-                          <Check size={17} aria-hidden="true" />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setDeleting(review)}
-                        disabled={pending}
-                        aria-label={`Delete review by ${review.customer?.email ?? 'customer'}`}
-                        title="Delete review"
-                        className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Trash2 size={17} aria-hidden="true" />
-                      </button>
-                    </span>
-                    {pending ? (
-                      <span role="status" className="mt-1 block text-right text-xs text-muted-foreground">
-                        Saving…
-                      </span>
-                    ) : null}
-                  </td>
-                </tr>
-              );
-            })}
+                  ) : null}
+                </td>
+                <td className="px-4 py-3">
+                  <p className="font-medium text-foreground">
+                    {[review.customer?.firstName, review.customer?.lastName]
+                      .filter((part) => typeof part === 'string' && part.trim() !== '')
+                      .join(' ')
+                      .trim() || '—'}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">{review.customer?.email ?? '—'}</p>
+                </td>
+                <td className="px-4 py-3">
+                  <ReviewStatusBadge isApproved={review.isApproved} />
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">{formatDate(review.createdAt)}</td>
+              </tr>
+            ))}
           </Table>
           <Pagination
             page={pagination.page}
@@ -358,12 +273,6 @@ export function ReviewsPage() {
         </>
       )}
 
-      <div className="flex justify-start">
-        <Button variant="secondary" onClick={() => refreshReviews()} disabled={isLoading}>
-          Refresh list
-        </Button>
-      </div>
-
       {searchHelpOpen ? (
         <Modal title="What can review search find?" onClose={() => setSearchHelpOpen(false)}>
           <p className="text-sm leading-6 text-muted-foreground">
@@ -375,30 +284,6 @@ export function ReviewsPage() {
           <div className="mt-5 flex justify-end">
             <Button variant="secondary" onClick={() => setSearchHelpOpen(false)}>
               Got it
-            </Button>
-          </div>
-        </Modal>
-      ) : null}
-
-      {deleting ? (
-        <Modal title="Delete this review?" onClose={() => !mutating && setDeleting(null)} persistent={mutating}>
-          <p className="text-sm leading-6 text-muted-foreground">
-            The {deleting.rating}/5 review
-            {deleting.title ? (
-              <>
-                {' '}“<span className="font-semibold text-foreground">{deleting.title}</span>”
-              </>
-            ) : null}{' '}
-            by <span className="font-semibold text-foreground">{deleting.customer?.email ?? 'the customer'}</span>{' '}
-            will be removed permanently. The purchased order record stays
-            untouched.
-          </p>
-          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button variant="secondary" onClick={() => setDeleting(null)} disabled={mutating}>
-              Keep review
-            </Button>
-            <Button variant="destructive" loading={mutating} onClick={handleDelete}>
-              Yes, delete
             </Button>
           </div>
         </Modal>

@@ -33,7 +33,7 @@ const orderStatusSchema = z.enum([
   "CANCELLED",
 ]);
 
-const paymentStatusSchema = z.enum(["PENDING", "PAID", "FAILED", "REFUNDED"]);
+const paymentStatusSchema = z.enum(["PENDING", "PAID", "FAILED", "REFUNDED", "CANCELLED"]);
 
 /**
  * Admin order list query. Every field is explicit (API.md §9: never

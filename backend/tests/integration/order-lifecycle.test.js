@@ -50,7 +50,7 @@ async function registerCustomer() {
   const email = `${RUN.toLowerCase()}@example.test`;
   const registered = await request(app)
     .post("/api/v1/auth/register")
-    .send({ email, password: "TestPass123!", firstName: "Lifecycle", lastName: "Tester" });
+    .send({ email, password: "TestPass123!", firstName: "Lifecycle", lastName: "Tester", phone: "9999999999" });
   expect(registered.status).toBe(201);
   ctx.customerId = registered.body.data.user.id;
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
@@ -119,7 +119,9 @@ beforeAll(async () => {
 }, 60000);
 
 afterAll(async () => {
+  // Product lifecycle cleanup (deactivate first, then delete).
   try {
+    await request(app).patch(`/api/v1/products/${ctx.productId}`).set(adminHeaders()).send({ isActive: false });
     await request(app).delete(`/api/v1/products/${ctx.productId}`).set(adminHeaders());
   } catch { /* best-effort */ }
   try {
@@ -271,7 +273,7 @@ describe("transition guards", () => {
     const otherEmail = `${RUN.toLowerCase()}-other@example.test`;
     await request(app)
       .post("/api/v1/auth/register")
-      .send({ email: otherEmail, password: "TestPass123!" });
+      .send({ email: otherEmail, password: "TestPass123!", firstName: "Other" });
     const otherLogin = await request(app)
       .post("/api/v1/auth/login")
       .send({ email: otherEmail, password: "TestPass123!" });

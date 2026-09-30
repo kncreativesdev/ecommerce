@@ -1,5 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ShoppingCart } from 'lucide-react';
+import { Check, ShoppingCart } from 'lucide-react';
 import { toast } from 'sonner';
 import { PriceBlock } from './PriceBlock.jsx';
 import { ProductImage } from './ProductImage.jsx';
@@ -17,19 +18,47 @@ import { cn } from '../../lib/cn.js';
  * ONLY from real backend pricing. No ratings, reviews, stock, or
  * popularity — the backend exposes none.
  *
- * Card image rule (deterministic — see `getDefaultVariantImage` in
- * `utils/variantMedia.js`): the first active variant's primary image,
- * else its first ordered image, else the legacy product-level primary /
- * first image, else the placeholder. Achieved here via `getDefaultVariant`
- * + `ProductImage`'s variant-scoped `displayImageForVariant` pick (same
- * priority) — never random, never a non-default variant's image.
+ * Card image rule (deterministic — see `getProductCardImage` in
+ * `utils/variantMedia.js`): the persisted product-level primary image
+ * (whichever variant owns it), else the first active variant's primary /
+ * first ordered image, else the legacy product-level primary / first
+ * image, else the placeholder. Achieved here via `ProductImage` with the
+ * full `product` (product-level primary first) — a primary belonging to a
+ * non-default variant still shows on the card, while the PDP gallery stays
+ * variant-aware and never leaks sibling images.
  */
 export function ProductCard({ product, showWishlist = true, showAdd = true, className }) {
   const addItem = useCartStore((state) => state.addItem);
   const bulkPending = useCartStore((state) => state.bulkPending);
 
+  // Transient "Added" confirmation: UI-local only (never persisted).
+  // `adding` guards the in-flight request; `addedFor` records which
+  // variant the confirmation belongs to. `added` is derived (never
+  // stored), so a reused card instance showing a different variant can
+  // never leak the previous product's confirmation state.
+  const [adding, setAdding] = useState(false);
+  const [addedFor, setAddedFor] = useState(null);
+  const addedTimer = useRef(null);
+
+  // Timer cleanup on unmount — never update state after unmount.
+  useEffect(
+    () => () => {
+      if (addedTimer.current) {
+        clearTimeout(addedTimer.current);
+        addedTimer.current = null;
+      }
+    },
+    [],
+  );
+
+  // A reused card instance showing a different variant must never leak the
+  // previous product's confirmation state. All hooks stay above the early
+  // return so hook order never changes between renders.
+  const variant = product ? getDefaultVariant(product) : null;
+  const variantId = variant?.id ?? null;
+  const added = addedFor !== null && addedFor === variantId;
+
   if (!product) return null;
-  const variant = getDefaultVariant(product);
   const discount = getBestDiscountPercent(product);
   // Variant-specific availability from backend inventory truth. Cards use
   // the default purchasable variant (the unit quick-add buys).
@@ -47,20 +76,36 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
       toast.error('This product is out of stock.');
       return;
     }
-    const result = await addItem({
-      variantId: variant.id,
-      quantity: 1,
-      snapshot: {
-        productId: product.id,
-        productName: product.name,
-        productSlug: product.slug,
-        variantName: variant.name,
-        sku: variant.sku,
-        unitPrice: variant.price,
-      },
-    });
+    // No concurrent adds and no re-add during the confirmation window.
+    if (adding || added) return;
+    setAdding(true);
+    let result;
+    try {
+      result = await addItem({
+        variantId: variant.id,
+        quantity: 1,
+        snapshot: {
+          productId: product.id,
+          productName: product.name,
+          productSlug: product.slug,
+          variantName: variant.name,
+          sku: variant.sku,
+          unitPrice: variant.price,
+        },
+      });
+    } finally {
+      setAdding(false);
+    }
     if (result.ok) {
       toast.success(`${product.name} added to cart.`);
+      // Success-only confirmation: hold "Added" (disabled) for 2 seconds,
+      // then return to the normal action.
+      setAddedFor(variant.id);
+      if (addedTimer.current) clearTimeout(addedTimer.current);
+      addedTimer.current = setTimeout(() => {
+        addedTimer.current = null;
+        setAddedFor(null);
+      }, 2000);
     } else if (result.error?.code === 'INSUFFICIENT_STOCK' || result.error?.status === 409) {
       // Stale frontend state: the UI said in-stock but the backend rejects
       // (stock became unavailable) — surface as an out-of-stock toast.
@@ -87,7 +132,8 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
         >
           <ProductImage
             productId={product.id}
-            variantId={variant?.id ?? null}
+            variantId={null}
+            product={product}
             alt={product.name}
             imgClassName="object-cover"
           />
@@ -140,12 +186,22 @@ export function ProductCard({ product, showWishlist = true, showAdd = true, clas
           <button
             type="button"
             onClick={handleAdd}
-            disabled={bulkPending || !variant}
-            aria-label={`Add ${product.name} to cart`}
+            disabled={bulkPending || adding || added || !variant}
+            aria-label={added ? `Added ${product.name} to cart` : `Add ${product.name} to cart`}
+            aria-live="polite"
             className="mt-auto inline-flex min-h-[44px] w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity duration-200 hover:opacity-90 disabled:cursor-wait disabled:opacity-60 sm:min-h-[40px]"
           >
-            <ShoppingCart size={16} aria-hidden="true" />
-            Add
+            {added ? (
+              <>
+                <Check size={16} aria-hidden="true" />
+                Added
+              </>
+            ) : (
+              <>
+                <ShoppingCart size={16} aria-hidden="true" />
+                {adding ? 'Adding…' : 'Add to Cart'}
+              </>
+            )}
           </button>
         ) : null}
       </div>

@@ -41,6 +41,9 @@ function applyDeactivated(categories, scope, adapted) {
   return categories;
 }
 
+/** List scope: `active` (default) | `inactive` | `all` (admin `?status=`). */
+const CATEGORY_SCOPES = ['active', 'inactive', 'all'];
+
 export const useCategoryStore = create((set, get) => ({
   categories: [],
   status: 'idle',
@@ -59,10 +62,14 @@ export const useCategoryStore = create((set, get) => ({
     return listInflight;
   },
 
-  refreshCategories: async (scope = get().scope) => {
-    set({ status: 'loading', error: null, scope });
+  refreshCategories: async (scope) => {
+    // Same boundary guard as the product mirror: only backend-supported
+    // scope values ever reach `?status=` (a forwarded click event falls
+    // back to the current scope instead of poisoning state).
+    const nextScope = CATEGORY_SCOPES.includes(scope) ? scope : get().scope;
+    set({ status: 'loading', error: null, scope: nextScope });
     try {
-      const payload = await fetchCategories(scope);
+      const payload = await fetchCategories(nextScope);
       set({
         categories: adaptCategoryList(payload),
         status: 'success',

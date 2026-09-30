@@ -37,6 +37,16 @@ async function getById(req, res, next) {
   }
 }
 
+async function cancel(req, res, next) {
+  try {
+    const params = orderIdParamSchema.parse({ id: req.params.id });
+    const order = await ordersService.cancelOrder(req.user.id, params.id);
+    return res.status(200).json({ success: true, data: { order } });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 async function listAdmin(req, res, next) {
   try {
     const query = adminOrderListQuerySchema.parse(req.query);
@@ -95,4 +105,4 @@ async function updatePaymentAdmin(req, res, next) {
   }
 }
 
-module.exports = { create, list, getById, listAdmin, getByIdAdmin, updateStatusAdmin, bulkUpdateStatusAdmin, updatePaymentAdmin };
+module.exports = { create, list, getById, cancel, listAdmin, getByIdAdmin, updateStatusAdmin, bulkUpdateStatusAdmin, updatePaymentAdmin };

@@ -49,4 +49,37 @@ function toSafeCoupon(coupon) {
   };
 }
 
-module.exports = { formatDecimal, moneyToCents, centsToString, toSafeCoupon };
+/**
+ * Stable audit representation of a coupon row: money as "xx.xx" strings,
+ * dates as ISO strings, product links as a sorted id array. Normalizing
+ * here (rather than comparing raw Decimal/Date objects) keeps `"10"` vs
+ * `10` style artifacts from generating false audit differences.
+ */
+function toAuditSnapshot(coupon) {
+  return {
+    code: coupon.code,
+    description: coupon.description ?? null,
+    discountType: coupon.discountType,
+    discountValue: formatDecimal(coupon.discountValue, 2),
+    minimumOrderAmount: formatDecimal(coupon.minimumOrderAmount ?? null, 2),
+    maximumDiscountAmount: formatDecimal(coupon.maximumDiscountAmount ?? null, 2),
+    usageLimit: coupon.usageLimit ?? null,
+    startsAt: coupon.startsAt ? new Date(coupon.startsAt).toISOString() : null,
+    expiresAt: coupon.expiresAt ? new Date(coupon.expiresAt).toISOString() : null,
+    isActive: coupon.isActive,
+    productIds: [...(coupon.products || []).map((link) => link.productId)].sort(),
+  };
+}
+
+function toSafeCouponHistory(row) {
+  return {
+    id: row.id,
+    couponId: row.couponId,
+    action: row.action,
+    actor: { id: row.actorId ?? null, email: row.actorEmail ?? null },
+    metadata: row.metadata ?? null,
+    createdAt: row.createdAt,
+  };
+}
+
+module.exports = { formatDecimal, moneyToCents, centsToString, toSafeCoupon, toAuditSnapshot, toSafeCouponHistory };

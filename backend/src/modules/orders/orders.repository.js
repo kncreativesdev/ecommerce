@@ -1,7 +1,7 @@
 const { prisma } = require("../../config/database");
 const { AppError } = require("../../utils/appError");
 const { priceToCents, centsToString } = require("./orders.utils");
-const { tryConsumeUsageTx } = require("../coupons/coupons.repository");
+const { tryConsumeUsageTx, recordUsageTx } = require("../coupons/coupons.repository");
 
 const ORDER_ITEM_SELECT = {
   id: true,
@@ -26,7 +26,10 @@ const ORDER_ITEM_SELECT = {
 function pickDisplayImage(variantImages, productImages) {
   const ordered = (list) => [...(list || [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   const vImages = ordered(variantImages);
-  const pImages = ordered(productImages);
+  // Product fallback is legacy product-level media only (variantId null) —
+  // sibling-variant images must never leak into an imageless variant's
+  // snapshot. Mirrors the storefront `productLevelImages` partition.
+  const pImages = ordered((productImages || []).filter((image) => image?.variantId == null));
   const pick = vImages.find((image) => image.isPrimary) ?? vImages[0] ?? null;
   if (pick) return pick;
   return pImages.find((image) => image.isPrimary) ?? pImages[0] ?? null;
@@ -34,7 +37,7 @@ function pickDisplayImage(variantImages, productImages) {
 
 const TX_IMAGE_SELECT = {
   orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  select: { storagePath: true, altText: true, sortOrder: true, isPrimary: true },
+  select: { storagePath: true, altText: true, sortOrder: true, isPrimary: true, variantId: true },
 };
 
 const ORDER_ADDRESS_SELECT = {
@@ -75,12 +78,25 @@ const ORDER_WITH_DETAILS_SELECT = {
   status: true,
   subtotal: true,
   discountTotal: true,
+  couponId: true,
   shippingTotal: true,
   taxTotal: true,
   grandTotal: true,
   currency: true,
   createdAt: true,
   updatedAt: true,
+  // Coupon applied at checkout (null for orders without one). The brief
+  // preserves which coupon produced `discountTotal` (code/definition);
+  // the amount itself stays snapshotted on the order.
+  coupon: {
+    select: {
+      id: true,
+      code: true,
+      description: true,
+      discountType: true,
+      discountValue: true,
+    },
+  },
   items: {
     orderBy: { createdAt: "asc" },
     select: ORDER_ITEM_SELECT,
@@ -128,6 +144,13 @@ async function findAddressByIdAndUserId(id, userId) {
   return prisma.address.findFirst({
     where: { id, userId },
     select: ADDRESS_SNAPSHOT_SELECT,
+  });
+}
+
+async function findCustomerPhoneById(userId) {
+  return prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, phone: true },
   });
 }
 
@@ -187,6 +210,10 @@ async function findOrdersAdmin(filters) {
       OR: [
         { orderNumber: { contains: search } },
         { items: { some: { sku: { contains: search } } } },
+        // Product-name search over the immutable item snapshots (the
+        // purchased product's name at order time — later renames never
+        // rewrite history, and the snapshot is what the admin sees).
+        { items: { some: { productName: { contains: search } } } },
         { user: { email: { contains: search } } },
         { user: { firstName: { contains: search } } },
         { user: { lastName: { contains: search } } },
@@ -323,6 +350,10 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
         status: "PENDING",
         subtotal,
         discountTotal,
+        // Link the applied coupon (if any) so order detail views can show
+        // WHICH coupon produced the discount. Usage was already consumed
+        // in-transaction below; the amount stays snapshotted above.
+        couponId: coupon ? coupon.couponId : null,
         shippingTotal: "0.00",
         taxTotal: "0.00",
         grandTotal,
@@ -409,6 +440,11 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
     // failed order (stock race, address issue, number conflict retry) never
     // consumes usage, and concurrent checkouts serialize on the guarded
     // `usedCount < usageLimit` predicate (loser gets 409, order rolled back).
+    // The per-customer usage row follows the global consume (preserving the
+    // existing exhausted-limit precedence): its UNIQUE (couponId, userId)
+    // pair is the one-time-per-customer race guard — concurrent same-customer
+    // orders leave at most one winner, losers get 409 COUPON_ALREADY_USED
+    // with the whole transaction rolled back.
     if (coupon) {
       const consumed = await tryConsumeUsageTx(tx, coupon.couponId);
       if (consumed.outcome === "missing") {
@@ -416,6 +452,10 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
       }
       if (consumed.outcome === "exhausted") {
         throw new AppError(409, "COUPON_USAGE_LIMIT_EXCEEDED", "Coupon usage limit has been exceeded");
+      }
+      const recorded = await recordUsageTx(tx, { couponId: coupon.couponId, userId, orderId: order.id });
+      if (recorded.outcome === "already-used") {
+        throw new AppError(409, "COUPON_ALREADY_USED", "You have already used this coupon.");
       }
     }
 
@@ -448,15 +488,19 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
  * Admin status mutation. Conditional on `expectedStatus` so a concurrent
  * admin action surfaces as a 409 conflict instead of silently winning.
  * Transition to CANCELLED atomically restores the quantities decremented
- * at checkout and writes ORDER_CANCELLED ledger rows (DATABASE.md §22).
- * The frontend never touches inventory directly.
+ * at checkout, writes ORDER_CANCELLED ledger rows (DATABASE.md §22), and
+ * moves the order's payment record(s) to CANCELLED — all inside the same
+ * transaction, so order, payment, ledger, history, and notification can
+ * never diverge. The frontend never touches inventory directly.
  *
- * Atomicity (single Prisma transaction): order status write + exactly
- * one immutable history row + exactly one customer notification. If any
- * write fails the whole transition rolls back, so the current status,
- * the ledger, and the customer's inbox can never silently diverge.
- * Same-status retries are rejected by the service before reaching here,
- * so no duplicate history/notification rows can be produced.
+ * Atomicity (single Prisma transaction): order status write + payment
+ * cancellation + exactly one immutable history row + exactly one customer
+ * notification. If any write fails the whole transition rolls back, so
+ * the current status, the payment, the ledger, and the customer's inbox
+ * can never silently diverge. Same-status retries are rejected by the
+ * service before reaching here, so no duplicate history/notification
+ * rows can be produced. Orders without a payment record keep that shape
+ * (no payment row is invented).
  */
 async function updateOrderStatusTransaction(orderId, expectedStatus, nextStatus, options = {}) {
   return prisma.$transaction(async (tx) => {
@@ -515,6 +559,15 @@ async function updateOrderStatusTransaction(orderId, expectedStatus, nextStatus,
           },
         });
       }
+      // The order's payment (usually the single COD row written at
+      // checkout) moves to CANCELLED in the same transaction — an order is
+      // never left CANCELLED with an active payment state. Zero rows
+      // matched simply means the order has no payment record, which is
+      // preserved as-is (no payment row is invented, no refund recorded).
+      await tx.payment.updateMany({
+        where: { orderId },
+        data: { status: "CANCELLED" },
+      });
     }
 
     await tx.orderStatusHistory.create({
@@ -554,7 +607,8 @@ async function updateOrderStatusTransaction(orderId, expectedStatus, nextStatus,
  *   concurrent change rolls back the whole bulk as a conflict instead of
  *   double-applying,
  * - CANCELLED restores checkout-decremented stock with ORDER_CANCELLED
- *   ledger rows (missing stock row aborts the whole bulk),
+ *   ledger rows (missing stock row aborts the whole bulk) and moves each
+ *   order's payments to CANCELLED in the same transaction,
  * - exactly one immutable history row + exactly one customer notification.
  *
  * Any failure (missing order, status conflict, inventory gap) throws and
@@ -619,6 +673,13 @@ async function bulkUpdateOrderStatusTransaction(orderIds, expectedById, nextStat
             },
           });
         }
+        // Same-transaction payment cancellation as the single-order path:
+        // no CANCELLED order keeps an active payment state, and orders
+        // without payments keep that shape.
+        await tx.payment.updateMany({
+          where: { orderId },
+          data: { status: "CANCELLED" },
+        });
       }
       await tx.orderStatusHistory.create({
         data: {
@@ -695,6 +756,7 @@ async function updateOrderPaymentStatusTransaction(orderId, expectedPaymentStatu
 
 module.exports = {
   findAddressByIdAndUserId,
+  findCustomerPhoneById,
   findOrdersByUserId,
   findOrderByIdAndUserId,
   findOrdersAdmin,

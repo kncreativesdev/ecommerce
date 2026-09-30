@@ -83,4 +83,24 @@ describe("toSafeCartItem display image priority", () => {
     const item = toSafeCartItem(lineFixture([], []));
     expect(item.image).toBeNull();
   });
+
+  it("never leaks sibling-variant images into an imageless variant fallback", () => {
+    const item = toSafeCartItem(
+      lineFixture(
+        [],
+        [
+          img({ storagePath: "products/p/sibling.webp", sortOrder: 0, isPrimary: true, variantId: "v-other" }),
+          img({ storagePath: "products/p/hero.webp", sortOrder: 5, isPrimary: false, variantId: null }),
+        ]
+      )
+    );
+    expect(item.image).toMatchObject({ storagePath: "products/p/hero.webp" });
+  });
+
+  it("resolves null for imageless variants when only sibling-variant images exist", () => {
+    const item = toSafeCartItem(
+      lineFixture([], [img({ storagePath: "products/p/sibling.webp", variantId: "v-other" })])
+    );
+    expect(item.image).toBeNull();
+  });
 });

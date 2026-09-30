@@ -5,6 +5,7 @@ const {
   couponIdParamSchema,
   validateCouponRequestSchema,
   adminCouponListQuerySchema,
+  couponHistoryQuerySchema,
 } = require("./coupons.validation");
 
 async function list(req, res, next) {
@@ -30,7 +31,7 @@ async function getById(req, res, next) {
 async function create(req, res, next) {
   try {
     const input = createCouponSchema.parse(req.body);
-    const coupon = await couponsService.createCoupon(input);
+    const coupon = await couponsService.createCoupon(input, { id: req.user.id });
     return res.status(201).json({ success: true, data: { coupon } });
   } catch (err) {
     return next(err);
@@ -41,7 +42,7 @@ async function update(req, res, next) {
   try {
     const params = couponIdParamSchema.parse({ id: req.params.id });
     const input = updateCouponSchema.parse(req.body);
-    const coupon = await couponsService.updateCoupon(params.id, input);
+    const coupon = await couponsService.updateCoupon(params.id, input, { id: req.user.id });
     return res.status(200).json({ success: true, data: { coupon } });
   } catch (err) {
     return next(err);
@@ -51,8 +52,19 @@ async function update(req, res, next) {
 async function remove(req, res, next) {
   try {
     const params = couponIdParamSchema.parse({ id: req.params.id });
-    const { id } = await couponsService.deleteCoupon(params.id);
+    const { id } = await couponsService.deleteCoupon(params.id, { id: req.user.id });
     return res.status(200).json({ success: true, data: { id, message: "Coupon deleted" } });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function history(req, res, next) {
+  try {
+    const params = couponIdParamSchema.parse({ id: req.params.id });
+    const query = couponHistoryQuerySchema.parse(req.query);
+    const { history, pagination } = await couponsService.listCouponHistory(params.id, query);
+    return res.status(200).json({ success: true, data: { history }, meta: pagination });
   } catch (err) {
     return next(err);
   }
@@ -68,4 +80,4 @@ async function validateForCart(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, validateForCart };
+module.exports = { list, getById, create, update, remove, history, validateForCart };

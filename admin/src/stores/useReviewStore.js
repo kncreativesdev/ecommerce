@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { deleteReviewAdmin, fetchReviewsAdmin, setReviewApproved } from '../services/review.service.js';
+import { fetchReviewsAdmin } from '../services/review.service.js';
 
 export const REVIEW_PAGE_SIZE = 20;
 
@@ -11,17 +11,17 @@ const DEFAULT_FILTERS = {
 };
 
 /**
- * Admin review state (Zustand) — backend-managed ONLY.
+ * Admin review state (Zustand) — backend-managed ONLY, strictly read-only.
  *
  * Filtering/sorting/pagination are SERVER-driven: the backend exposes
  * explicit list params
  * (`page/limit/isApproved/rating/productId/userId/search/sortBy/sortOrder`),
  * so every filter/page change refetches. The store holds the current
  * filter set, the last page of rows, and the server `meta` pagination.
- * Moderation mutations (`setApproved`, `removeReview`) reconcile from
- * the authoritative server response. No URL state, no fake moderation
- * state, no client-side status derivation — `isApproved` always comes
- * from the server.
+ * There are no review mutation actions: the admin cannot approve,
+ * reject, edit, delete, or change the status of a review. No URL state,
+ * no fake moderation state, no client-side status derivation —
+ * `isApproved` always comes from the server.
  */
 export const useReviewStore = create((set, get) => ({
   reviews: [],
@@ -73,41 +73,6 @@ export const useReviewStore = create((set, get) => ({
   setPage: (page) => get().refreshReviews({ page }),
 
   clearFilters: () => get().refreshReviews({ filters: { ...DEFAULT_FILTERS } }),
-
-  /**
-   * Reconcile a server-fresh review after a confirmed moderation
-   * mutation. The response is authoritative; nothing is merged
-   * client-side.
-   */
-  syncReview: (record) => {
-    if (!record?.id) return;
-    set((state) => ({
-      reviews: state.reviews.some((item) => item.id === record.id)
-        ? state.reviews.map((item) => (item.id === record.id ? { ...item, ...record } : item))
-        : state.reviews,
-    }));
-  },
-
-  /**
-   * Drop a deleted review from the mirror (delete is server-confirmed;
-   * the refresh corrects counts/pages).
-   */
-  dropReview: (id) => {
-    if (!id) return;
-    set((state) => ({ reviews: state.reviews.filter((item) => item.id !== id) }));
-  },
-
-  setApproved: async (id, isApproved) => {
-    const record = await setReviewApproved(id, isApproved);
-    if (record?.id) get().syncReview(record);
-    return record;
-  },
-
-  removeReview: async (id) => {
-    await deleteReviewAdmin(id);
-    get().dropReview(id);
-    await get().refreshReviews();
-  },
 
   clearError: () => set({ error: null }),
 }));

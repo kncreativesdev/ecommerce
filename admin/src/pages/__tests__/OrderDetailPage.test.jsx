@@ -111,3 +111,41 @@ describe('OrderDetailPage purchased-variant display', () => {
     expect(screen.getByLabelText('No image snapshot for this item')).toBeInTheDocument();
   });
 });
+
+describe('OrderDetailPage coupon display', () => {
+  function couponFixture() {
+    return {
+      ...detailFixture(),
+      discountTotal: '32.00',
+      grandTotal: '288.00',
+      coupon: {
+        id: 'c1',
+        code: 'SAVE10',
+        description: '10% off sitewide',
+        discountType: 'PERCENTAGE',
+        discountValue: '10.00',
+      },
+    };
+  }
+
+  it('shows which coupon produced the order discount', async () => {
+    fetchOrderAdmin.mockResolvedValue(couponFixture());
+    renderDetail();
+    await screen.findByText('ORD-2026-000009');
+
+    expect(screen.getByText(/Discount \(SAVE10\)/)).toBeInTheDocument();
+    const block = screen.getByRole('group', { name: 'Coupon applied' });
+    expect(block).toHaveTextContent('SAVE10');
+    expect(block).toHaveTextContent('10% off');
+    expect(block).toHaveTextContent('10% off sitewide');
+  });
+
+  it('renders no coupon block for orders placed without a coupon', async () => {
+    fetchOrderAdmin.mockResolvedValue({ ...detailFixture(), coupon: null });
+    renderDetail();
+    await screen.findByText('ORD-2026-000009');
+
+    expect(screen.getByText('Discount')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Coupon applied' })).not.toBeInTheDocument();
+  });
+});

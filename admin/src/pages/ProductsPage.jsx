@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Ban, PackagePlus, PackageSearch, Pencil, RotateCcw, Search, X } from 'lucide-react';
+import { Ban, PackagePlus, PackageSearch, Pencil, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTaxonomy } from '../hooks/useTaxonomy.js';
 import { useProductStore } from '../stores/useProductStore.js';
-import { activateProduct, deactivateProduct } from '../services/product.service.js';
+import { activateProduct, deactivateProduct, deleteProduct } from '../services/product.service.js';
 import { findCategoryById } from '../utils/taxonomy.js';
 import { Badge } from '../components/ui/Badge.jsx';
 import { Button } from '../components/ui/Button.jsx';
@@ -26,8 +26,15 @@ import { cn } from '../lib/cn.js';
  * local and resets on search/scope edits). Columns show available fields —
  * name/slug, category, first-variant price, variant count, status badges,
  * creation date. No stock/rating/popularity columns: the API provides
- * none. Deactivate is a soft-deactivate (`DELETE` → `isActive=false`,
- * hidden from storefront reads); reactivate is `PATCH { isActive: true }`.
+ * none.
+ *
+ * Lifecycle UX (backend-enforced, never client-only): active products
+ * offer Deactivate (`PATCH { isActive: false }`, soft-deactivate hidden
+ * from storefront reads) but never Delete; inactive products offer Delete
+ * (`DELETE`, rejected with `409` while active) and Reactivate (`PATCH
+ * { isActive: true }`). A blocked deactivation (in-process orders hold
+ * the product) surfaces the backend `409 PRODUCT_HAS_ACTIVE_ORDERS`
+ * message with the blocking order numbers.
  */
 const SCOPES = [
   { value: 'all', label: 'All' },
@@ -64,6 +71,7 @@ export function ProductsPage() {
   // the store mirror; search and page stay component-local).
   const [page, setPage] = useState(1);
   const [deactivating, setDeactivating] = useState(null); // product | null
+  const [deleting, setDeleting] = useState(null); // product | null
   const [mutating, setMutating] = useState(false);
   const [activatingId, setActivatingId] = useState(null);
 
@@ -165,19 +173,47 @@ export function ProductsPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!deleting?.id || mutating) return;
+    setMutating(true);
+    try {
+      await deleteProduct(deleting.id);
+      removeProduct(deleting.id);
+      toast.success(`“${deleting.name}” deleted.`);
+      setDeleting(null);
+    } catch (deleteError) {
+      if (deleteError?.status === 404 || deleteError?.code === 'PRODUCT_NOT_FOUND') {
+        removeProduct(deleting.id);
+        toast.success('Product already deleted.');
+        setDeleting(null);
+      } else {
+        // Backend business rule (e.g. PRODUCT_ACTIVE_CANNOT_DELETE) —
+        // surface the server message, keep the dialog open.
+        toast.error(deleteError?.message ?? 'Delete failed. Please try again.');
+      }
+    } finally {
+      setMutating(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Products"
         meta={isLoading ? 'Loading products…' : `${visible.length} of ${products.length} ${products.length === 1 ? 'product' : 'products'}`}
         actions={
-          <Link
-            to="/catalog/products/new"
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
-          >
-            <PackagePlus size={17} aria-hidden="true" />
-            Add Product
-          </Link>
+          <>
+            <Button variant="secondary" size="sm" onClick={() => refreshProducts()} disabled={isLoading}>
+              Refresh
+            </Button>
+            <Link
+              to="/catalog/products/new"
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
+            >
+              <PackagePlus size={17} aria-hidden="true" />
+              Add Product
+            </Link>
+          </>
         }
       />
 
@@ -266,7 +302,7 @@ export function ProductsPage() {
           ))}
         </div>
       ) : error ? (
-        <ErrorState title="Couldn’t load products" message={error.message} onRetry={refreshProducts} />
+        <ErrorState title="Couldn’t load products" message={error.message} onRetry={() => refreshProducts()} />
       ) : products.length === 0 ? (
         <EmptyState
           icon={PackageSearch}
@@ -336,16 +372,27 @@ export function ProductsPage() {
                       <Ban size={17} aria-hidden="true" />
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleActivate(product)}
-                      disabled={activatingId === product.id}
-                      aria-label={`Reactivate ${product.name}`}
-                      title={`Reactivate ${product.name}`}
-                      className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-success/10 hover:text-success disabled:cursor-wait disabled:opacity-60"
-                    >
-                      <RotateCcw size={17} aria-hidden="true" />
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleActivate(product)}
+                        disabled={activatingId === product.id}
+                        aria-label={`Reactivate ${product.name}`}
+                        title={`Reactivate ${product.name}`}
+                        className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-success/10 hover:text-success disabled:cursor-wait disabled:opacity-60"
+                      >
+                        <RotateCcw size={17} aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleting(product)}
+                        aria-label={`Delete ${product.name}`}
+                        title={`Delete ${product.name}`}
+                        className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <Trash2 size={17} aria-hidden="true" />
+                      </button>
+                    </>
                   )}
                 </span>
               </td>
@@ -363,12 +410,6 @@ export function ProductsPage() {
         </>
       )}
 
-      <div className="flex justify-start">
-        <Button variant="secondary" onClick={refreshProducts} disabled={isLoading}>
-          Refresh list
-        </Button>
-      </div>
-
       {deactivating ? (
         <Modal
           title={`Deactivate “${deactivating.name}”?`}
@@ -377,7 +418,8 @@ export function ProductsPage() {
         >
           <p className="text-sm leading-6 text-muted-foreground">
             This soft-deactivates the product: it disappears from the storefront and can no
-            longer be purchased, but its record (variants, order history) is kept.
+            longer be purchased, but its record (variants, order history) is kept. Deactivation
+            is blocked while an in-process order still contains the product.
           </p>
           <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button variant="secondary" onClick={() => setDeactivating(null)} disabled={mutating}>
@@ -385,6 +427,27 @@ export function ProductsPage() {
             </Button>
             <Button variant="destructive" loading={mutating} onClick={handleDeactivate}>
               Yes, deactivate
+            </Button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {deleting ? (
+        <Modal
+          title={`Delete “${deleting.name}”?`}
+          onClose={() => !mutating && setDeleting(null)}
+          persistent={mutating}
+        >
+          <p className="text-sm leading-6 text-muted-foreground">
+            This inactive product will be removed from the catalog. Its variants and record are
+            kept out of the storefront; historical orders that reference it stay intact.
+          </p>
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button variant="secondary" onClick={() => setDeleting(null)} disabled={mutating}>
+              Keep product
+            </Button>
+            <Button variant="destructive" loading={mutating} onClick={handleDelete}>
+              Yes, delete
             </Button>
           </div>
         </Modal>

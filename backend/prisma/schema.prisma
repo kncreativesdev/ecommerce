@@ -43,6 +43,10 @@ enum PaymentStatus {
   PAID
   FAILED
   REFUNDED
+  // CANCELLED marks the payment of a cancelled order. Written only by
+  // the atomic order-cancellation transaction (never by the standalone
+  // payment-status endpoint); terminal — no transitions leave it.
+  CANCELLED
 }
 
 enum InventoryTransactionType {
@@ -62,6 +66,29 @@ enum DiscountType {
 enum NotificationType {
   ORDER_STATUS
   MARKETING
+}
+
+// Customer return-request lifecycle. Only REQUESTED is produced in the
+// current scope (customer submission + viewing); the remaining states are
+// the controlled vocabulary for a future admin review workflow. No
+// transitions exist yet — a request never leaves REQUESTED today.
+enum ReturnRequestStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum ReturnReason {
+  WRONG_COLOR
+  WRONG_SIZE
+  DAMAGED
+  DEFECTIVE
+  WRONG_ITEM
+  NOT_AS_DESCRIBED
+  CHANGED_MIND
+  OTHER
 }
 
 enum MarketingNotificationType {
@@ -92,6 +119,8 @@ model User {
   orders    Order[]
   reviews   Review[]
   notifications Notification[]
+  couponUsages CouponUsage[]
+  returnRequests ReturnRequest[]
 
   @@index([isActive])
   @@map("users")
@@ -390,6 +419,12 @@ model Order {
   status        OrderStatus @default(PENDING)
   subtotal      Decimal     @db.Decimal(10, 2)
   discountTotal Decimal     @default(0) @map("discount_total") @db.Decimal(10, 2)
+  // Coupon applied at checkout (nullable: orders without a coupon, and
+  // legacy orders placed before the link existed). The discount itself is
+  // snapshotted in `discountTotal`; the relation preserves WHICH coupon
+  // (code/definition) produced it. SetNull keeps order history intact if
+  // a coupon row is ever removed.
+  couponId      String?     @map("coupon_id") @db.Char(36)
   shippingTotal Decimal     @default(0) @map("shipping_total") @db.Decimal(10, 2)
   taxTotal      Decimal     @default(0) @map("tax_total") @db.Decimal(10, 2)
   grandTotal    Decimal     @db.Decimal(10, 2)
@@ -398,16 +433,20 @@ model Order {
   updatedAt     DateTime    @updatedAt @map("updated_at")
 
   user      User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  coupon    Coupon?        @relation(fields: [couponId], references: [id], onDelete: SetNull)
   items     OrderItem[]
   addresses OrderAddress[]
   payments  Payment[]
   statusHistory OrderStatusHistory[]
   notifications Notification[]
+  couponUsage CouponUsage?
+  returnRequest ReturnRequest?
 
   @@index([userId])
   @@index([status])
   @@index([createdAt])
   @@index([userId, createdAt])
+  @@index([couponId])
   @@map("orders")
 }
 
@@ -539,6 +578,8 @@ model Coupon {
   updatedAt             DateTime     @updatedAt @map("updated_at")
 
   products CouponProduct[]
+  orders   Order[]
+  usages   CouponUsage[]
 
   @@index([isActive])
   @@index([startsAt])
@@ -560,6 +601,66 @@ model CouponProduct {
   @@id([couponId, productId])
   @@index([productId])
   @@map("coupon_products")
+}
+
+// ============================================================
+// COUPON USAGES (one-time-per-customer ledger)
+// ============================================================
+// One row per customer + coupon pair, written atomically inside the
+// successful order transaction (never on quote, never on failed orders).
+// The @@unique([couponId, userId]) pair is the race guard: concurrent
+// same-customer orders using the same coupon serialize on it and all but
+// one fail deterministically with COUPON_ALREADY_USED. `orderId` ties the
+// usage to the successful order that consumed it. Cancelled orders keep
+// their row (no restoration semantics exist by design).
+
+model CouponUsage {
+  id String @id @default(uuid()) @db.Char(36)
+  couponId String @map("coupon_id") @db.Char(36)
+  userId String @map("user_id") @db.Char(36)
+  orderId String @unique @map("order_id") @db.Char(36)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, userId])
+  @@index([userId])
+  @@map("coupon_usages")
+}
+
+// ============================================================
+// COUPON HISTORY (admin lifecycle audit)
+// ============================================================
+// Append-only audit of administrative coupon lifecycle events
+// (CREATED / UPDATED / DEACTIVATED / REACTIVATED / DELETED), written in
+// the SAME transaction as the coupon mutation. Deliberately FK-free
+// (same convention as OrderStatusHistory.createdBy): history must survive
+// coupon deletion and admin deactivation. `actorEmail` is a display
+// snapshot taken at event time. Customer coupon usage is NOT recorded
+// here — CouponUsage remains its source of truth.
+
+enum CouponHistoryAction {
+  CREATED
+  UPDATED
+  DEACTIVATED
+  REACTIVATED
+  DELETED
+}
+
+model CouponHistory {
+  id         String               @id @default(uuid()) @db.Char(36)
+  couponId   String               @map("coupon_id") @db.Char(36)
+  actorId    String?              @map("actor_id") @db.Char(36)
+  actorEmail String?              @map("actor_email") @db.VarChar(255)
+  action     CouponHistoryAction  @map("action")
+  metadata   Json?                @map("metadata")
+  createdAt  DateTime             @default(now()) @map("created_at")
+
+  @@index([couponId, createdAt])
+  @@index([actorId])
+  @@map("coupon_histories")
 }
 
 // ============================================================
@@ -591,6 +692,49 @@ model OrderStatusHistory {
   @@index([orderId])
   @@index([orderId, createdAt])
   @@map("order_status_history")
+}
+
+// ============================================================
+// ORDER RETURNS (customer return-request workflow)
+// ============================================================
+// A return request is a SEPARATE business process from the order
+// lifecycle: it never mutates Order.status, OrderStatusHistory, payments,
+// or inventory. Order-level granularity (one request per order, enforced
+// by @@unique([orderId])); every stored request is permanently active in
+// the current scope since no status-change workflow exists yet, which
+// also makes the unique constraint the duplicate-creation race guard.
+
+model ReturnRequest {
+  id        String              @id @default(uuid()) @db.Char(36)
+  orderId   String              @unique @map("order_id") @db.Char(36)
+  userId    String              @map("user_id") @db.Char(36)
+  status    ReturnRequestStatus @default(REQUESTED)
+  reason    ReturnReason
+  details   String?             @db.VarChar(1000)
+  createdAt DateTime            @default(now()) @map("created_at")
+  updatedAt DateTime            @updatedAt @map("updated_at")
+
+  order   Order                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  user    User                   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  history ReturnRequestHistory[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("return_requests")
+}
+
+model ReturnRequestHistory {
+  id              String              @id @default(uuid()) @db.Char(36)
+  returnRequestId String              @map("return_request_id") @db.Char(36)
+  status          ReturnRequestStatus
+  actorId         String?             @map("actor_id") @db.Char(36)
+  metadata        Json?
+  createdAt       DateTime            @default(now()) @map("created_at")
+
+  returnRequest ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+
+  @@index([returnRequestId, createdAt])
+  @@map("return_request_history")
 }
 
 // ============================================================

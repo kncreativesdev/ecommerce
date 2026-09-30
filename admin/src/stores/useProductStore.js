@@ -12,6 +12,9 @@ import { activateProduct, createProduct, fetchProducts, updateProduct } from '..
  * drops the row only under the active scope; activation upserts so the row
  * stays visible everywhere.
  */
+/** List scope: `active` (default) | `inactive` | `all` (admin `?status=`). */
+const PRODUCT_SCOPES = ['active', 'inactive', 'all'];
+
 export const useProductStore = create((set, get) => ({
   products: [],
   status: 'idle',
@@ -25,10 +28,15 @@ export const useProductStore = create((set, get) => ({
     await get().refreshProducts();
   },
 
-  refreshProducts: async (scope = get().scope) => {
-    set({ status: 'loading', error: null, scope });
+  refreshProducts: async (scope) => {
+    // Guard the backend allowlist at the boundary: callers must pass one
+    // of active|inactive|all. Anything else (including an accidentally
+    // forwarded click event) falls back to the current scope instead of
+    // producing an invalid `?status=` request that the backend rejects.
+    const nextScope = PRODUCT_SCOPES.includes(scope) ? scope : get().scope;
+    set({ status: 'loading', error: null, scope: nextScope });
     try {
-      const payload = await fetchProducts(scope);
+      const payload = await fetchProducts(nextScope);
       set({
         products: Array.isArray(payload) ? payload : [],
         status: 'success',

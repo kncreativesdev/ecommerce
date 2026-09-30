@@ -1,21 +1,90 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Banknote, Check, Plus } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Banknote, Check, Phone, Plus } from 'lucide-react';
 import { Container } from '../components/ui/Container.jsx';
 import { Breadcrumbs } from '../components/layout/Breadcrumbs.jsx';
 import { EmptyState } from '../components/ui/EmptyState.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/Skeleton.jsx';
+import { FormField, TextInput } from '../components/ui/FormField.jsx';
 import { ProductImage } from '../components/catalog/ProductImage.jsx';
 import { AddressForm } from '../components/addresses/AddressForm.jsx';
 import { CouponSection } from '../components/checkout/CouponSection.jsx';
+import { useAuthStore } from '../stores/useAuthStore.js';
 import { useCartStore } from '../stores/useCartStore.js';
 import { useCheckoutStore } from '../stores/useCheckoutStore.js';
 import { createOrder } from '../services/orders.service.js';
 import { fetchAddresses } from '../services/addresses.service.js';
+import { updateProfile } from '../services/users.service.js';
 import { formatINR } from '../lib/format.js';
 import { cn } from '../lib/cn.js';
+
+/**
+ * Inline phone capture for customers whose profile has no phone number.
+ * Uses the existing profile update endpoint (`PATCH /users/me`) and writes
+ * the authoritative result straight back into the auth store — checkout
+ * continues immediately, no logout/login required. Phone is never kept in
+ * localStorage and no second phone state is introduced: the auth store
+ * `user` remains the single source of truth.
+ */
+function CheckoutPhoneForm({ onSaved }) {
+  const [phone, setPhone] = useState('');
+  const [fieldError, setFieldError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async (event) => {
+    event.preventDefault();
+    const trimmed = phone.trim();
+    if (!trimmed) {
+      setFieldError('Phone is required to place your order.');
+      return;
+    }
+    setFieldError(null);
+    setSaving(true);
+    try {
+      const updated = await updateProfile({ phone: trimmed });
+      useAuthStore.setState({ user: updated ?? null });
+      toast.success('Phone number saved — you can place your order now.');
+      if (onSaved) onSaved();
+    } catch (error) {
+      const detail = Array.isArray(error?.details)
+        ? error.details.find((entry) => entry?.path === 'phone')
+        : null;
+      setFieldError(detail?.message ?? error?.message ?? 'Could not save the phone number. Please try again.');
+      toast.error(detail?.message ?? error?.message ?? 'Could not save the phone number. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSave} noValidate aria-label="Add phone number" className="flex flex-col gap-2.5">
+      <FormField label="Phone" required error={fieldError}>
+        {({ describedBy }) => (
+          <TextInput
+            type="tel"
+            autoComplete="tel"
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            placeholder="Your contact number"
+            aria-invalid={Boolean(fieldError)}
+            aria-describedby={describedBy}
+          />
+        )}
+      </FormField>
+      <button
+        type="submit"
+        disabled={saving}
+        aria-busy={saving}
+        className="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-2 self-start rounded-xl bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity duration-200 hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
+      >
+        <Phone size={15} aria-hidden="true" />
+        {saving ? 'Saving…' : 'Save phone number'}
+      </button>
+    </form>
+  );
+}
 
 /**
  * Checkout (`/checkout`, protected): vertical stepper — 1) shipping address
@@ -48,6 +117,12 @@ export function CheckoutPage() {
   const setPlacingOrder = useCheckoutStore((state) => state.setPlacingOrder);
   const appliedCoupon = useCheckoutStore((state) => state.appliedCoupon);
   const resetCheckout = useCheckoutStore((state) => state.reset);
+  // Authoritative customer phone comes from the session profile
+  // (`useAuthStore.user`), never localStorage and never the address book
+  // (address phones are per-address contacts, snapshotted independently).
+  const user = useAuthStore((state) => state.user);
+  const userPhone = typeof user?.phone === 'string' ? user.phone.trim() : '';
+  const hasValidPhone = userPhone !== '';
 
   const [addresses, setAddresses] = useState([]);
   const [addressStatus, setAddressStatus] = useState('loading');
@@ -55,6 +130,10 @@ export function CheckoutPage() {
   const [addressReloadToken, setAddressReloadToken] = useState(0);
   const [showAddressForm, setShowAddressForm] = useState(false);
   const [addressMutating, setAddressMutating] = useState(false);
+  // Backend phone rejection message kept inline (in addition to the toast)
+  // so a stale profile mirror is visible and recoverable without leaving
+  // checkout. Cleared once an inline save succeeds.
+  const [phoneServerError, setPhoneServerError] = useState(null);
 
   useEffect(() => {
     document.title = 'Checkout — Tech Pulse';
@@ -125,9 +204,17 @@ export function CheckoutPage() {
     : (addresses.find((address) => address.id === billingAddressId) ?? null);
 
   const canPlaceOrder =
-    cart.items.length > 0 && shippingAddress && (billingSameAsShipping || billingAddress) && !placingOrder;
+    cart.items.length > 0 &&
+    shippingAddress &&
+    (billingSameAsShipping || billingAddress) &&
+    hasValidPhone &&
+    !placingOrder;
 
   const handlePlaceOrder = async () => {
+    if (!hasValidPhone) {
+      toast.error('A phone number is required to place your order. Please add one below.');
+      return;
+    }
     if (!canPlaceOrder) return;
     setPlacingOrder(true);
     try {
@@ -157,6 +244,14 @@ export function CheckoutPage() {
       // exhaustion is a 409 that must not route to the stock/cart flow.
       if (typeof error?.code === 'string' && error.code.startsWith('COUPON_')) {
         toast.error(error?.message ?? 'Coupon could not be applied to this order.');
+      } else if (error?.code === 'ORDER_PHONE_REQUIRED') {
+        // Missing profile phone: stay on the review step with the precise
+        // backend message — never clear the cart, never navigate away, never
+        // report success. The phone gate below (with its inline save form)
+        // unblocks the retry.
+        const message = error?.message ?? 'A phone number is required to place your order.';
+        setPhoneServerError(message);
+        toast.error(message);
       } else if (error?.code === 'ORDER_INSUFFICIENT_STOCK' || error?.status === 409) {
         toast.error('Some items are out of stock — back to cart to review.');
         await bootstrapCart();
@@ -395,12 +490,17 @@ export function CheckoutPage() {
       ) : null}
 
       {step === 3 ? (
-        <section aria-label="Review and place order" className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5 shadow-sm">
-          <h2 className="text-base font-bold text-foreground">3. Review & place order</h2>
-          <ul className="flex flex-col gap-3">
+        <section aria-label="Review and place order" className="flex flex-col gap-5 rounded-2xl border-2 border-primary/25 bg-card p-5 shadow-md sm:p-6">
+          <div className="flex flex-col gap-1 border-b border-border pb-4">
+            <h2 className="text-xl font-extrabold tracking-tight text-foreground">3. Review your order</h2>
+            <p className="text-sm text-muted-foreground">
+              Confirm your items, quantities, and totals before placing the order.
+            </p>
+          </div>
+          <ul className="flex flex-col divide-y divide-border" aria-label="Order items">
             {cart.items.map((line) => (
-              <li key={line.id} className="flex items-center gap-3">
-                <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg">
+              <li key={line.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
+                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-border">
                   {line.product?.id ? (
                     <ProductImage productId={line.product.id} variantId={line.variantId ?? line.variant?.id ?? null} alt={line.product.name} />
                   ) : (
@@ -408,24 +508,79 @@ export function CheckoutPage() {
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-foreground">{line.product?.name ?? 'Product'}</p>
-                  <p className="text-xs tabular-nums text-muted-foreground">
-                    {formatINR(line.unitPrice)} × {line.quantity}
+                  <p className="truncate text-[15px] font-bold text-foreground">{line.product?.name ?? 'Product'}</p>
+                  <p className="mt-0.5 text-[13px] tabular-nums text-muted-foreground">
+                    Qty {line.quantity} · {formatINR(line.unitPrice)} each
                   </p>
                 </div>
-                <p className="shrink-0 text-sm font-bold tabular-nums">{formatINR(line.lineTotal)}</p>
+                <p className="shrink-0 text-[15px] font-extrabold tabular-nums text-foreground">{formatINR(line.lineTotal)}</p>
               </li>
             ))}
           </ul>
-          <dl className="flex items-center justify-between border-t border-border pt-3 text-sm">
-            <dt className="text-muted-foreground">Subtotal ({cart.itemCount} items)</dt>
-            <dd className="text-lg font-extrabold tabular-nums">{formatINR(cart.subtotal)}</dd>
-          </dl>
+          <div className="flex flex-col gap-1.5 rounded-xl bg-surface-muted/60 px-4 py-3" role="group" aria-label="Order summary">
+            <dl className="flex items-center justify-between text-sm">
+              <dt className="text-muted-foreground">Subtotal ({cart.itemCount} {cart.itemCount === 1 ? 'item' : 'items'})</dt>
+              <dd className="font-bold tabular-nums text-foreground">{formatINR(cart.subtotal)}</dd>
+            </dl>
+            {appliedCoupon?.coupon ? (
+              <dl className="flex items-center justify-between text-sm">
+                <dt className="text-muted-foreground">Coupon {appliedCoupon.coupon.code}</dt>
+                <dd className="font-bold tabular-nums text-success">−{formatINR(appliedCoupon.discountAmount)}</dd>
+              </dl>
+            ) : null}
+            <dl className="flex items-center justify-between text-sm">
+              <dt className="text-muted-foreground">Shipping</dt>
+              <dd className="font-bold tabular-nums text-foreground">Free</dd>
+            </dl>
+            <dl className="mt-1 flex items-center justify-between border-t border-border pt-2.5">
+              <dt className="text-base font-extrabold text-foreground">Total payable</dt>
+              <dd className="text-2xl font-extrabold tabular-nums text-foreground">
+                {(() => {
+                  // Display-only subtraction of two server values (same
+                  // convention as CouponSection's estimate): the backend
+                  // alone decides the final total at placement.
+                  const subtotalNumber = Number(cart.subtotal);
+                  const discountNumber = Number(appliedCoupon?.discountAmount ?? 0);
+                  if (!Number.isFinite(subtotalNumber)) return formatINR(cart.subtotal);
+                  if (!appliedCoupon?.coupon || !Number.isFinite(discountNumber)) {
+                    return formatINR(cart.subtotal);
+                  }
+                  return formatINR((subtotalNumber - discountNumber).toFixed(2));
+                })()}
+              </dd>
+            </dl>
+          </div>
           <CouponSection disabled={placingOrder} />
           <p className="flex items-start gap-2 rounded-xl bg-surface-muted px-3.5 py-2.5 text-xs leading-5 text-muted-foreground">
             <Banknote size={15} aria-hidden="true" className="mt-0.5 shrink-0 text-accent" />
             Payment method: Cash on Delivery. Pay in cash when your order arrives — no online payment needed.
           </p>
+          {!hasValidPhone || phoneServerError ? (
+            <div
+              role="alert"
+              aria-label="Phone number required"
+              className="flex flex-col gap-3 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3.5"
+            >
+              <p className="text-sm font-semibold text-foreground">
+                A phone number is required to place your order.
+              </p>
+              {phoneServerError ? (
+                <p className="text-xs leading-5 text-destructive">{phoneServerError}</p>
+              ) : (
+                <p className="-mt-1 text-xs leading-5 text-muted-foreground">
+                  The courier needs it for delivery updates. Save it once — it stays on your profile for future orders.
+                </p>
+              )}
+              <CheckoutPhoneForm onSaved={() => setPhoneServerError(null)} />
+              <p className="text-xs text-muted-foreground">
+                Prefer the account page?{' '}
+                <Link to="/account/profile" className="font-semibold text-accent-link hover:no-underline">
+                  Update it in your profile
+                </Link>{' '}
+                — checkout picks it up when you return.
+              </p>
+            </div>
+          ) : null}
           <div className="flex justify-between">
             <button
               type="button"

@@ -26,6 +26,7 @@ const PAYMENT_STATUS_TONES = {
   PAID: 'success',
   FAILED: 'destructive',
   REFUNDED: 'neutral',
+  CANCELLED: 'neutral',
 };
 
 function humanize(value) {

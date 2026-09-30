@@ -43,6 +43,35 @@ describe('apiClient envelope handling', () => {
     await expect(apiGetPage('/coupons/nope')).rejects.toMatchObject({ status: 404, code: 'COUPON_NOT_FOUND' });
     await expect(apiGet('/coupons/nope')).rejects.toBeInstanceOf(ApiError);
   });
+
+  it('preserves field errors nested in error.details', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid request data',
+          details: [{ path: 'discountValue', message: 'Fixed discount must be above 0' }],
+        },
+      }, { ok: false, status: 422 })),
+    );
+
+    await expect(apiGet('/coupons/nope')).rejects.toMatchObject({
+      status: 422,
+      code: 'VALIDATION_ERROR',
+      details: [{ path: 'discountValue', message: 'Fixed discount must be above 0' }],
+    });
+  });
+
+  it('defaults details to [] when the envelope carries none', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse({ success: false, error: { code: 'COUPON_NOT_FOUND', message: 'Missing' } }, { ok: false, status: 404 })),
+    );
+
+    await expect(apiGet('/coupons/nope')).rejects.toMatchObject({ status: 404, details: [] });
+  });
 });
 
 describe('isSessionInvalidError (logout gate)', () => {

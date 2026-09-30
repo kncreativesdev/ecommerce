@@ -1,6 +1,6 @@
 const { env } = require("../../config/env");
 const authService = require("./auth.service");
-const { registerSchema, loginSchema } = require("./auth.validation");
+const { registerSchema, loginSchema, googleSignInSchema } = require("./auth.validation");
 const { setRefreshCookie, clearRefreshCookie } = require("./auth.utils");
 
 async function register(req, res, next) {
@@ -17,6 +17,17 @@ async function login(req, res, next) {
   try {
     const input = loginSchema.parse(req.body);
     const { user, accessToken, refreshToken } = await authService.login(input);
+    setRefreshCookie(res, refreshToken);
+    return res.status(200).json({ success: true, data: { user, accessToken } });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+async function googleSignIn(req, res, next) {
+  try {
+    const input = googleSignInSchema.parse(req.body);
+    const { user, accessToken, refreshToken } = await authService.loginWithGoogle(input.idToken);
     setRefreshCookie(res, refreshToken);
     return res.status(200).json({ success: true, data: { user, accessToken } });
   } catch (err) {
@@ -55,4 +66,4 @@ async function me(req, res, next) {
   }
 }
 
-module.exports = { register, login, refresh, logout, me };
+module.exports = { register, login, googleSignIn, refresh, logout, me };

@@ -25,7 +25,7 @@ export const ORDER_STATUSES = [
   'CANCELLED',
 ];
 
-export const PAYMENT_STATUSES = ['PENDING', 'PAID', 'FAILED', 'REFUNDED'];
+export const PAYMENT_STATUSES = ['PENDING', 'PAID', 'FAILED', 'REFUNDED', 'CANCELLED'];
 
 /**
  * Forward-only fulfilment; CANCELLED only before dispatch.
@@ -83,12 +83,13 @@ export function orderStatusLabel(status) {
   return ORDER_STATUS_LABELS[status] ?? status;
 }
 
-/** COD/manual payment states; REFUNDED records a manual refund (no gateway). */
+/** COD/manual payment states; REFUNDED records a manual refund (no gateway). CANCELLED is terminal and written only by the atomic order-cancellation transaction. */
 export const PAYMENT_NEXT_STATES = {
   PENDING: ['PAID', 'FAILED'],
   FAILED: ['PAID'],
   PAID: ['REFUNDED'],
   REFUNDED: [],
+  CANCELLED: [],
 };
 
 export function allowedOrderTransitions(status) {

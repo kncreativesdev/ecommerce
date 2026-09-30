@@ -1,7 +1,7 @@
 const { AppError } = require("../../utils/appError");
 const couponsRepository = require("./coupons.repository");
 const cartRepository = require("../cart/cart.repository");
-const { toSafeCoupon, moneyToCents, centsToString } = require("./coupons.utils");
+const { toSafeCoupon, toAuditSnapshot, toSafeCouponHistory, moneyToCents, centsToString } = require("./coupons.utils");
 const {
   normalizeCouponCode,
   couponCodeSchema,
@@ -126,7 +126,15 @@ async function validateCouponForUserCart(userId, code) {
     productId: item.variant.productId,
     lineTotal: centsToString(moneyToCents(item.variant.price) * BigInt(item.quantity)),
   }));
-  return validateCouponForOrder({ code: normalized, lines });
+  const quote = await validateCouponForOrder({ code: normalized, lines });
+  // One-time-per-customer rule (checked last so existing coupon error
+  // precedence — inactive/expired/limit/minimum — is preserved). Quote-time
+  // rejection is advisory; the order transaction re-enforces atomically.
+  const used = await couponsRepository.findUsageByCouponAndUser(quote.coupon.id, userId);
+  if (used) {
+    throw new AppError(409, "COUPON_ALREADY_USED", "You have already used this coupon.");
+  }
+  return quote;
 }
 
 const ADMIN_DEFAULT_PAGE = 1;
@@ -254,7 +262,21 @@ async function listCouponsAdmin(query) {
   };
 }
 
-async function createCoupon(input) {
+/**
+ * Diff two audit snapshots (stable normalized shapes): returns
+ * `{ field: { before, after } }` for actually-changed fields only.
+ */
+function diffAuditSnapshots(before, after) {
+  const changes = {};
+  for (const key of Object.keys(after)) {
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+      changes[key] = { before: before[key], after: after[key] };
+    }
+  }
+  return changes;
+}
+
+async function createCoupon(input, actor) {
   const code = normalizeCouponCode(couponCodeSchema.parse(input.code));
   if (code === "") {
     throw new AppError(422, "VALIDATION_ERROR", "Coupon code must not be empty");
@@ -289,8 +311,26 @@ async function createCoupon(input) {
     isActive: input.isActive ?? true,
   };
 
+  const snapshot = {
+    code: data.code,
+    description: data.description ?? null,
+    discountType: data.discountType,
+    discountValue: data.discountValue,
+    minimumOrderAmount: data.minimumOrderAmount ?? null,
+    maximumDiscountAmount: data.maximumDiscountAmount ?? null,
+    usageLimit: data.usageLimit ?? null,
+    startsAt: data.startsAt ? data.startsAt.toISOString() : null,
+    expiresAt: data.expiresAt ? data.expiresAt.toISOString() : null,
+    isActive: data.isActive ?? true,
+    productIds: [...(productIds ?? [])].sort(),
+  };
+
   try {
-    const id = await couponsRepository.createCouponRecord(data, productIds);
+    const id = await couponsRepository.createCouponRecord(data, productIds, {
+      actorId: actor ? actor.id : null,
+      action: "CREATED",
+      metadata: { snapshot },
+    });
     return getCoupon(id);
   } catch (err) {
     if (isCouponCodeConflict(err)) {
@@ -300,7 +340,7 @@ async function createCoupon(input) {
   }
 }
 
-async function updateCoupon(id, input) {
+async function updateCoupon(id, input, actor) {
   if (!input || Object.keys(input).length === 0) {
     throw new AppError(422, "COUPON_UPDATE_INVALID", "No updatable fields provided");
   }
@@ -381,8 +421,34 @@ async function updateCoupon(id, input) {
 
   const productIds = await normalizeProductIds(input.productIds);
 
+  // Audit diff from persisted before/after state (never trusts the frontend
+  // to describe the change). An isActive transition classifies the event as
+  // DEACTIVATED/REACTIVATED; any other real change is UPDATED; a no-op
+  // update records nothing.
+  const before = toAuditSnapshot(current);
+  const after = { ...before };
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "startsAt" || key === "expiresAt") {
+      after[key] = value ? value.toISOString() : null;
+    } else {
+      after[key] = value;
+    }
+  }
+  if (productIds !== undefined) {
+    after.productIds = [...productIds].sort();
+  }
+  const changes = diffAuditSnapshots(before, after);
+  let audit = null;
+  if (Object.keys(changes).length > 0) {
+    let action = "UPDATED";
+    if (changes.isActive) {
+      action = changes.isActive.after === false ? "DEACTIVATED" : "REACTIVATED";
+    }
+    audit = { actorId: actor ? actor.id : null, action, metadata: { changes } };
+  }
+
   try {
-    const result = await couponsRepository.updateCouponRecord(id, data, productIds);
+    const result = await couponsRepository.updateCouponRecord(id, data, productIds, audit);
     if (result.outcome === "missing") {
       throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
     }
@@ -398,8 +464,11 @@ async function updateCoupon(id, input) {
   return getCoupon(id);
 }
 
-async function deleteCoupon(id) {
-  const result = await couponsRepository.deleteCouponRecord(id);
+async function deleteCoupon(id, actor) {
+  const result = await couponsRepository.deleteCouponRecord(id, {
+    actorId: actor ? actor.id : null,
+    action: "DELETED",
+  });
   if (result.outcome === "missing") {
     throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
   }
@@ -413,6 +482,28 @@ async function deleteCoupon(id) {
   return { id };
 }
 
+async function listCouponHistory(id, query) {
+  const existing = await couponsRepository.findCouponById(id);
+  if (!existing) {
+    throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
+  }
+  const page = query.page ?? ADMIN_DEFAULT_PAGE;
+  const limit = Math.min(query.limit ?? ADMIN_DEFAULT_LIMIT, ADMIN_MAX_LIMIT);
+  const [rows, total] = await Promise.all([
+    couponsRepository.findCouponHistory(id, { skip: (page - 1) * limit, take: limit }),
+    couponsRepository.countCouponHistory(id),
+  ]);
+  return {
+    history: rows.map(toSafeCouponHistory),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    },
+  };
+}
+
 module.exports = {
   validateCouponForOrder,
   validateCouponForUserCart,
@@ -422,6 +513,7 @@ module.exports = {
   createCoupon,
   updateCoupon,
   deleteCoupon,
+  listCouponHistory,
   // Pure discount math, exported for unit testing (no DB, no side effects).
   calculateDiscountAmount,
   applyDiscountCap,

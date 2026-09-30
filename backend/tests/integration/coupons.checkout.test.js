@@ -12,10 +12,11 @@ import { prisma } from "../../src/config/database.js";
  *
  * Test data uses a unique TSTCK prefix. Products/categories are
  * DEACTIVATED afterwards (no hard-delete endpoints by design); coupons
- * are removed via prisma (orders never reference them, so history is
- * unaffected). The throwaway customer, their cart rows, and the 2 placed
- * orders intentionally persist — orders are immutable by design and the
- * suite documents this instead of faking deletions.
+ * are removed via prisma (orders keep their totals snapshots and stay
+ * valid through the SET NULL link). The throwaway customer, their cart
+ * rows, and the placed orders intentionally persist — orders are
+ * immutable by design and the suite documents this instead of faking
+ * deletions.
  */
 
 const RUN = `TSTCK${Date.now().toString(36).toUpperCase()}`;
@@ -36,7 +37,7 @@ async function registerCustomer() {
   const email = `${RUN.toLowerCase()}@example.test`;
   const registered = await request(app)
     .post("/api/v1/auth/register")
-    .send({ email, password: "TestPass123!", firstName: "Coupon", lastName: "Tester" });
+    .send({ email, password: "TestPass123!", firstName: "Coupon", lastName: "Tester", phone: "9999999999" });
   expect(registered.status).toBe(201);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
@@ -107,8 +108,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Deactivate catalog rows (soft lifecycle by design); remove test
-  // coupons directly (orders hold no coupon reference — totals snapshots
-  // stay intact).
+  // coupons directly (orders keep their totals snapshots; the coupon link
+  // is SET NULL, so history stays valid).
+  try {
+    await request(app).patch(`/api/v1/products/${ctx.productId}`).set(adminHeaders()).send({ isActive: false });
+  } catch { /* best-effort */ }
   try {
     await request(app).delete(`/api/v1/products/${ctx.productId}`).set(adminHeaders());
   } catch { /* best-effort */ }
@@ -158,22 +162,36 @@ describe("POST /orders with couponCode (server-authoritative checkout)", () => {
     expect(order.discountTotal).toBe("20.00");
     expect(order.grandTotal).toBe("180.00");
     expect(order.payments[0].amount).toBe("180.00");
+    // The order links WHICH coupon produced the discount (code/definition
+    // brief for order detail views); the amount stays snapshotted above.
+    expect(order.coupon).toMatchObject({
+      code: ctx.couponCode,
+      discountType: "PERCENTAGE",
+      discountValue: "10.00",
+    });
 
     const coupon = await request(app).get(`/api/v1/coupons/${ctx.couponId}`).set(adminHeaders());
     expect(coupon.body.data.coupon.usedCount).toBe(1);
   });
 
-  it("consumes usage exactly once per successful order", async () => {
+  it("rejects a second use by the same customer without consuming usage", async () => {
     await addCartItems(2);
+    const cartBefore = await request(app).get("/api/v1/cart").set(customerHeaders());
+    const quantityBefore = cartBefore.body.data.cart.totalQuantity;
     const res = await request(app).post("/api/v1/orders").set(customerHeaders()).send({
       shippingAddressId: ctx.addressId,
       couponCode: ctx.couponCode,
     });
-    expect(res.status).toBe(201);
-    expect(res.body.data.order.discountTotal).toBe("20.00");
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("COUPON_ALREADY_USED");
 
+    // No second usage record, no second order, global counter untouched,
+    // cart intact for a coupon-free retry.
     const coupon = await request(app).get(`/api/v1/coupons/${ctx.couponId}`).set(adminHeaders());
-    expect(coupon.body.data.coupon.usedCount).toBe(2);
+    expect(coupon.body.data.coupon.usedCount).toBe(1);
+
+    const cart = await request(app).get("/api/v1/cart").set(customerHeaders());
+    expect(cart.body.data.cart.totalQuantity).toBe(quantityBefore);
   });
 
   it("rejects an invalid coupon without consuming usage or clearing the cart", async () => {
@@ -186,7 +204,7 @@ describe("POST /orders with couponCode (server-authoritative checkout)", () => {
     expect(res.body.error.code).toBe("COUPON_NOT_FOUND");
 
     const coupon = await request(app).get(`/api/v1/coupons/${ctx.couponId}`).set(adminHeaders());
-    expect(coupon.body.data.coupon.usedCount).toBe(2);
+    expect(coupon.body.data.coupon.usedCount).toBe(1);
 
     const cart = await request(app).get("/api/v1/cart").set(customerHeaders());
     expect(cart.body.data.cart.items.length).toBeGreaterThan(0);
@@ -244,5 +262,18 @@ describe("POST /orders with couponCode (server-authoritative checkout)", () => {
     expect(order.status).toBe(200);
     expect(order.body.data.order.discountTotal).toBe("20.00");
     expect(order.body.data.order.grandTotal).toBe("180.00");
+    // The linked brief still identifies the coupon; the snapshotted
+    // amounts never rewrite (definition edits stay prospective).
+    expect(order.body.data.order.coupon).toMatchObject({ code: ctx.couponCode });
+  });
+
+  it("leaves the coupon link empty for orders placed without a coupon", async () => {
+    await addCartItems(1);
+    const res = await request(app).post("/api/v1/orders").set(customerHeaders()).send({
+      shippingAddressId: ctx.addressId,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data.order.discountTotal).toBe("0.00");
+    expect(res.body.data.order.coupon).toBeNull();
   });
 });

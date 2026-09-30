@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { OrderItemThumb, OrderStatusBadge } from '../OrderBits.jsx';
+import { OrderCoupon, OrderItemThumb, OrderStatusBadge } from '../OrderBits.jsx';
 
 function renderThumb(item) {
   return render(
@@ -51,5 +51,49 @@ describe('OrderStatusBadge friendly labels', () => {
   it('passes unknown statuses through instead of blanking', () => {
     render(<OrderStatusBadge status="MYSTERY" />);
     expect(screen.getByText('MYSTERY')).toBeInTheDocument();
+  });
+});
+
+describe('OrderCoupon', () => {
+  function renderCoupon(order) {
+    return render(
+      <MemoryRouter>
+        <OrderCoupon order={order} />
+      </MemoryRouter>,
+    );
+  }
+
+  it('shows code, offer, description, and saved amount for a percentage coupon', () => {
+    renderCoupon({
+      discountTotal: '20.00',
+      coupon: { id: 'c1', code: 'SAVE10', description: '10% off sitewide', discountType: 'PERCENTAGE', discountValue: '10.00' },
+    });
+    const block = screen.getByRole('group', { name: 'Coupon applied' });
+    expect(within(block).getByText('SAVE10')).toBeInTheDocument();
+    // The offer line and the description both contain "10% off" — assert
+    // each in its exact element.
+    expect(within(block).getByText('· 10% off')).toBeInTheDocument();
+    expect(within(block).getByText('10% off sitewide')).toBeInTheDocument();
+    expect(within(block).getByText(/You saved/)).toBeInTheDocument();
+  });
+
+  it('shows a money offer for a fixed-amount coupon without a description', () => {
+    renderCoupon({
+      discountTotal: '150.00',
+      coupon: { id: 'c2', code: 'FLAT150', description: null, discountType: 'FIXED', discountValue: '150.00' },
+    });
+    const block = screen.getByRole('group', { name: 'Coupon applied' });
+    expect(within(block).getByText('FLAT150')).toBeInTheDocument();
+    // Offer ("₹150.00 off") and savings ("You saved −₹150.00") share the
+    // amount — assert each exact text.
+    expect(within(block).getByText(/₹150\.00 off/)).toBeInTheDocument();
+    expect(within(block).getByText(/You saved/)).toBeInTheDocument();
+  });
+
+  it('renders nothing when the order used no coupon', () => {
+    const { container } = renderCoupon({ discountTotal: '0.00', coupon: null });
+    expect(container).toBeEmptyDOMElement();
+    const { container: legacy } = renderCoupon({ discountTotal: '0.00' });
+    expect(legacy).toBeEmptyDOMElement();
   });
 });

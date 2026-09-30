@@ -5,11 +5,12 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CouponsPage } from '../CouponsPage.jsx';
 import { CouponNewPage } from '../CouponNewPage.jsx';
 import { useCouponStore, COUPON_PAGE_SIZE } from '../../stores/useCouponStore.js';
-import { fetchCoupons } from '../../services/coupon.service.js';
+import { deactivateCoupon, deleteCoupon, fetchCoupons, fetchCouponHistory } from '../../services/coupon.service.js';
 
 vi.mock('../../services/coupon.service.js', () => ({
   fetchCoupons: vi.fn(),
   fetchCouponById: vi.fn(),
+  fetchCouponHistory: vi.fn(),
   createCoupon: vi.fn(),
   updateCoupon: vi.fn(),
   activateCoupon: vi.fn(),
@@ -252,5 +253,142 @@ describe('CouponsPage refresh failure', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     const table = screen.getByRole('table');
     expect(within(table).getByText('SAVE10')).toBeInTheDocument();
+  });
+});
+
+describe('CouponsPage row history action', () => {
+  const historyEntry = {
+    id: 'history-1',
+    couponId: 'coupon-1',
+    action: 'CREATED',
+    actor: { id: 'admin-1', email: 'admin@example.test' },
+    metadata: { snapshot: { code: 'SAVE10' } },
+    createdAt: '2026-09-01T10:00:00.000Z',
+  };
+
+  function renderTwoRows() {
+    fetchCoupons.mockResolvedValue({
+      coupons: [couponFixture(), couponFixture({ id: 'coupon-2', code: 'ACTIVE5', isActive: false })],
+      pagination: { page: 1, limit: COUPON_PAGE_SIZE, total: 2, totalPages: 1 },
+    });
+    fetchCouponHistory.mockResolvedValue({
+      history: [historyEntry],
+      pagination: { page: 1, limit: 10, total: 1, totalPages: 1 },
+    });
+    renderCoupons();
+  }
+
+  it('shows a History action for every coupon row', async () => {
+    const user = userEvent.setup();
+    renderTwoRows();
+    expect(await screen.findByText('SAVE10')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View coupon history for SAVE10' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View coupon history for ACTIVE5' })).toBeInTheDocument();
+    expect(fetchCouponHistory).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'View coupon history for SAVE10' }));
+  });
+
+  it('opens the correct coupon history without touching other actions', async () => {
+    const user = userEvent.setup();
+    renderTwoRows();
+    await screen.findByText('SAVE10');
+
+    await user.click(screen.getByRole('button', { name: 'View coupon history for ACTIVE5' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Coupon history — ACTIVE5' });
+    expect(fetchCouponHistory).toHaveBeenCalledWith('coupon-2', { page: 1, limit: 10 });
+    expect(await within(dialog).findByText('Created')).toBeInTheDocument();
+    expect(within(dialog).getByText('admin@example.test')).toBeInTheDocument();
+    expect(deactivateCoupon).not.toHaveBeenCalled();
+    expect(deleteCoupon).not.toHaveBeenCalled();
+  });
+
+  it('closes back to the list and refetches on reopen', async () => {
+    const user = userEvent.setup();
+    renderTwoRows();
+    await screen.findByText('SAVE10');
+
+    await user.click(screen.getByRole('button', { name: 'View coupon history for SAVE10' }));
+    await screen.findByRole('dialog', { name: 'Coupon history — SAVE10' });
+    await user.click(screen.getByRole('button', { name: 'Close dialog' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByText('SAVE10')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'View coupon history for SAVE10' }));
+    await screen.findByRole('dialog', { name: 'Coupon history — SAVE10' });
+    expect(fetchCouponHistory).toHaveBeenCalledTimes(2);
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
+  it('resets to the newly selected coupon without cross-contamination', async () => {
+    const user = userEvent.setup();
+    fetchCoupons.mockResolvedValue({
+      coupons: [couponFixture(), couponFixture({ id: 'coupon-2', code: 'ACTIVE5', isActive: false })],
+      pagination: { page: 1, limit: COUPON_PAGE_SIZE, total: 2, totalPages: 1 },
+    });
+    const codes = { 'coupon-1': 'SAVE10', 'coupon-2': 'ACTIVE5' };
+    fetchCouponHistory.mockImplementation(async (id) => ({
+      history: [{
+        ...historyEntry,
+        id: `history-${id}`,
+        couponId: id,
+        metadata: { snapshot: { code: codes[id] } },
+      }],
+      pagination: { page: 1, limit: 10, total: 1, totalPages: 1 },
+    }));
+    renderCoupons();
+    await screen.findByText('SAVE10');
+
+    await user.click(screen.getByRole('button', { name: 'View coupon history for SAVE10' }));
+    await screen.findByRole('dialog', { name: 'Coupon history — SAVE10' });
+    await user.click(screen.getByRole('button', { name: 'Close dialog' }));
+
+    await user.click(screen.getByRole('button', { name: 'View coupon history for ACTIVE5' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Coupon history — ACTIVE5' });
+    expect(fetchCouponHistory).toHaveBeenLastCalledWith('coupon-2', { page: 1, limit: 10 });
+    expect(within(dialog).getByText('ACTIVE5')).toBeInTheDocument();
+    expect(within(dialog).queryByText('SAVE10')).not.toBeInTheDocument();
+  });
+
+  it('shows loading then error states inside the dialog', async () => {
+    const user = userEvent.setup();
+    fetchCoupons.mockResolvedValue({
+      coupons: [couponFixture()],
+      pagination: { page: 1, limit: COUPON_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    fetchCouponHistory.mockRejectedValueOnce(new Error('History unavailable'));
+    fetchCouponHistory.mockResolvedValueOnce({
+      history: [],
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 1 },
+    });
+    renderCoupons();
+    await screen.findByText('SAVE10');
+
+    await user.click(screen.getByRole('button', { name: 'View coupon history for SAVE10' }));
+    expect(await screen.findByText('Couldn’t load coupon history')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('No history yet')).toBeInTheDocument();
+  });
+});
+
+describe('CouponsPage header refresh', () => {
+  it('offers a single top-right Refresh button that re-fetches the list', async () => {
+    const user = userEvent.setup();
+    fetchCoupons.mockResolvedValue({
+      coupons: [couponFixture()],
+      pagination: { page: 1, limit: COUPON_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderCoupons();
+    await screen.findByText('SAVE10');
+
+    expect(screen.getAllByRole('button', { name: 'Refresh' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Refresh list' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(fetchCoupons).toHaveBeenCalledTimes(2);
+    expect(fetchCoupons).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'all' }),
+    );
   });
 });

@@ -5,12 +5,10 @@ import { MemoryRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { ReviewsPage } from '../ReviewsPage.jsx';
 import { useReviewStore } from '../../stores/useReviewStore.js';
-import { deleteReviewAdmin, fetchReviewsAdmin, setReviewApproved } from '../../services/review.service.js';
+import { fetchReviewsAdmin } from '../../services/review.service.js';
 
 vi.mock('../../services/review.service.js', () => ({
   fetchReviewsAdmin: vi.fn(),
-  setReviewApproved: vi.fn(),
-  deleteReviewAdmin: vi.fn(),
 }));
 
 function reviewFixture(overrides = {}) {
@@ -21,7 +19,7 @@ function reviewFixture(overrides = {}) {
     rating: 5,
     title: 'Excellent gadget',
     comment: 'Works great every day.',
-    isApproved: false,
+    isApproved: true,
     product: { id: 'p1', name: 'Test Gadget', slug: 'test-gadget' },
     customer: { id: 'c1', email: 'ada@example.test', firstName: 'Ada', lastName: 'Lovelace' },
     orderItem: { id: 'oi1', orderId: 'o1' },
@@ -55,7 +53,7 @@ beforeEach(() => {
   resetStore();
 });
 
-describe('ReviewsPage', () => {
+describe('ReviewsPage (view-only)', () => {
   it('renders the review list with product, customer, rating, and status', async () => {
     fetchReviewsAdmin.mockResolvedValue({
       reviews: [reviewFixture()],
@@ -70,8 +68,34 @@ describe('ReviewsPage', () => {
     expect(within(table).getByText('Excellent gadget')).toBeInTheDocument();
     expect(within(table).getByText('Test Gadget')).toBeInTheDocument();
     expect(within(table).getByText('ada@example.test')).toBeInTheDocument();
-    expect(within(table).getByText('Pending')).toBeInTheDocument();
+    expect(within(table).getByText('Approved')).toBeInTheDocument();
     expect(within(table).getByText('5/5')).toBeInTheDocument();
+  });
+
+  it('offers no approve, reject, edit, or delete controls', async () => {
+    fetchReviewsAdmin.mockResolvedValue({
+      reviews: [reviewFixture()],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    });
+    renderPage();
+    await screen.findByText('Excellent gadget');
+
+    expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reject/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /delete.*review/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^edit$/i })).not.toBeInTheDocument();
+    // No actions column at all on the view-only table.
+    const headers = within(screen.getByRole('table', { name: 'Customer reviews' })).getAllByRole('columnheader');
+    expect(headers.map((header) => header.textContent)).not.toContain('Actions');
+  });
+
+  it('exposes no review mutation API from the admin surface', async () => {
+    // The real admin service module is read-only: listing only, with no
+    // approve/reject/edit/delete helpers for the page to call.
+    const actualService = await vi.importActual('../../services/review.service.js');
+    expect(Object.keys(actualService).sort()).toEqual(['fetchReviewsAdmin']);
+    expect(useReviewStore.getState().setApproved).toBeUndefined();
+    expect(useReviewStore.getState().removeReview).toBeUndefined();
   });
 
   it('filters by moderation status through the server param', async () => {
@@ -108,68 +132,6 @@ describe('ReviewsPage', () => {
     expect(fetchReviewsAdmin).toHaveBeenLastCalledWith(expect.objectContaining({ search: 'gadget' }));
   });
 
-  it('approves a pending review and reconciles server state', async () => {
-    const user = userEvent.setup();
-    fetchReviewsAdmin.mockResolvedValue({
-      reviews: [reviewFixture()],
-      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-    });
-    setReviewApproved.mockResolvedValue(reviewFixture({ isApproved: true }));
-    const hrefBefore = window.location.href;
-    renderPage();
-    await screen.findByText('Excellent gadget');
-
-    await user.click(screen.getByRole('button', { name: 'Approve review by ada@example.test' }));
-    expect(setReviewApproved).toHaveBeenCalledWith('r1', true);
-    expect(await within(screen.getByRole('table', { name: 'Customer reviews' })).findByText('Approved')).toBeInTheDocument();
-    expect(await screen.findByText('Review approved.')).toBeInTheDocument();
-    expect(window.location.href).toBe(hrefBefore);
-  });
-
-  it('rejects an approved review back to pending (never deletes)', async () => {
-    const user = userEvent.setup();
-    fetchReviewsAdmin.mockResolvedValue({
-      reviews: [reviewFixture({ isApproved: true })],
-      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-    });
-    setReviewApproved.mockResolvedValue(reviewFixture({ isApproved: false }));
-    renderPage();
-    const table = await screen.findByRole('table', { name: 'Customer reviews' });
-    expect(within(table).getByText('Approved')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Reject review by ada@example.test' }));
-    expect(setReviewApproved).toHaveBeenCalledWith('r1', false);
-    expect(await within(screen.getByRole('table', { name: 'Customer reviews' })).findByText('Pending')).toBeInTheDocument();
-    expect(await screen.findByText(/stays listed under Pending/)).toBeInTheDocument();
-  });
-
-  it('deletes behind a confirmation without touching orders', async () => {
-    const user = userEvent.setup();
-    fetchReviewsAdmin.mockResolvedValue({
-      reviews: [reviewFixture()],
-      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-    });
-    deleteReviewAdmin.mockResolvedValue({ id: 'r1' });
-    // Initial load shows the row; the post-delete refresh returns empty.
-    fetchReviewsAdmin
-      .mockResolvedValueOnce({
-        reviews: [reviewFixture()],
-        pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-      })
-      .mockResolvedValue({ reviews: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } });
-    renderPage();
-    await screen.findByText('Excellent gadget');
-
-    await user.click(screen.getByRole('button', { name: 'Delete review by ada@example.test' }));
-    expect(screen.getByRole('dialog', { name: 'Delete this review?' })).toBeInTheDocument();
-    expect(deleteReviewAdmin).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole('button', { name: 'Yes, delete' }));
-    expect(deleteReviewAdmin).toHaveBeenCalledWith('r1');
-    expect(await screen.findByText('Review deleted. The order record is untouched.')).toBeInTheDocument();
-    expect(screen.queryByText('Excellent gadget')).not.toBeInTheDocument();
-  });
-
   it('shows the error state with retry on server failure', async () => {
     fetchReviewsAdmin.mockRejectedValueOnce({ message: 'List failed.' });
     renderPage();
@@ -177,6 +139,21 @@ describe('ReviewsPage', () => {
     expect(await screen.findByText('Couldn’t load reviews')).toBeInTheDocument();
     fetchReviewsAdmin.mockResolvedValue({ reviews: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }));
+    expect(fetchReviewsAdmin).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ReviewsPage header refresh', () => {
+  it('offers a single top-right Refresh button that re-fetches the list', async () => {
+    const user = userEvent.setup();
+    fetchReviewsAdmin.mockResolvedValue({ reviews: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } });
+    renderPage();
+    await screen.findByText('0 reviews');
+
+    expect(screen.getAllByRole('button', { name: 'Refresh' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Refresh list' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(fetchReviewsAdmin).toHaveBeenCalledTimes(2);
   });
 });

@@ -246,6 +246,11 @@ export function InventoryPage() {
         title="Inventory"
         meta={meta}
         description="Variant-level stock across the catalogue. Adjustments write signed ledger rows — never orders, totals, or snapshots."
+        actions={
+          <Button variant="secondary" size="sm" onClick={() => refreshInventory()} disabled={isLoading}>
+            Refresh
+          </Button>
+        }
       />
 
       {!isLoading && !error && (
@@ -431,12 +436,6 @@ export function InventoryPage() {
           />
         </>
       )}
-
-      <div className="flex justify-start">
-        <Button variant="secondary" onClick={() => refreshInventory()} disabled={isLoading}>
-          Refresh list
-        </Button>
-      </div>
 
       {adjusting ? (
         <Modal

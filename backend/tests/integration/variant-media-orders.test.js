@@ -97,7 +97,8 @@ beforeAll(async () => {
   ctx.otherVariant = other.body.data.product.variants[0];
 
   // Variant A: two images (second flagged primary). Variant B: one.
-  // Product level: one primary fallback image.
+  // Product level: one fallback image (non-primary — the product holds a
+  // single primary overall, owned by Variant A here).
   const a1 = await uploadImage(ctx.productId, await pngBuffer(), { variantId: ctx.variantA.id, sortOrder: 0 });
   expect(a1.status).toBe(201);
   ctx.imageA1 = a1.body.data.image;
@@ -111,14 +112,14 @@ beforeAll(async () => {
   const b1 = await uploadImage(ctx.productId, await pngBuffer(), { variantId: ctx.variantB.id });
   expect(b1.status).toBe(201);
   ctx.imageB1 = b1.body.data.image;
-  const p1 = await uploadImage(ctx.productId, await pngBuffer(), { isPrimary: "true" });
+  const p1 = await uploadImage(ctx.productId, await pngBuffer(), {});
   expect(p1.status).toBe(201);
   ctx.imageP1 = p1.body.data.image;
 
   const email = `${RUN.toLowerCase()}@example.test`;
   const registered = await request(app
   ).post("/api/v1/auth/register")
-    .send({ email, password: "TestPass123!", firstName: "Variant", lastName: "Tester" });
+    .send({ email, password: "TestPass123!", firstName: "Variant", lastName: "Tester", phone: "9999999999" });
   expect(registered.status).toBe(201);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
@@ -149,6 +150,9 @@ afterAll(async () => {
     }
   } catch { /* best-effort */ }
   try {
+    // Product lifecycle cleanup (deactivate first, then delete).
+    await request(app).patch(`/api/v1/products/${ctx.productId}`).set(adminHeaders()).send({ isActive: false });
+    await request(app).patch(`/api/v1/products/${ctx.otherProductId}`).set(adminHeaders()).send({ isActive: false });
     await request(app).delete(`/api/v1/products/${ctx.productId}`).set(adminHeaders());
     await request(app).delete(`/api/v1/products/${ctx.otherProductId}`).set(adminHeaders());
     await request(app).delete(`/api/v1/categories/${ctx.categoryId}`).set(adminHeaders());
@@ -206,7 +210,7 @@ describe("variant display data in cart and wishlist", () => {
     expect(added.status).toBe(200);
     const line = added.body.data.cart.items.find((item) => item.variantId === ctx.variantA.id);
     expect(line.variant.sku).toBe(`${RUN}-BLACK`);
-    // Variant A primary image wins over the product-level primary.
+    // Variant A primary image wins (single product primary lives on Variant A).
     expect(line.image).toMatchObject({ storagePath: ctx.imageA2.storagePath });
 
     const addedPlain = await request(app).post("/api/v1/cart/items").set(customerHeaders()).send({
@@ -215,7 +219,7 @@ describe("variant display data in cart and wishlist", () => {
     });
     expect(addedPlain.status).toBe(200);
     const plainLine = addedPlain.body.data.cart.items.find((item) => item.variantId === ctx.variantPlain.id);
-    // Imageless variant falls back to the product-level primary image.
+    // Imageless variant falls back to the product-level fallback image.
     expect(plainLine.image).toMatchObject({ storagePath: ctx.imageP1.storagePath });
   });
 

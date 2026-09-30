@@ -1,6 +1,7 @@
 const { AppError } = require("../../utils/appError");
 const productsRepository = require("./products.repository");
 const { findCategoryById } = require("../categories/categories.repository");
+const { ORDER_IN_PROCESS_STATUSES } = require("../orders/orders.service");
 const { normalizeSlug, toSafeProduct, toSafeVariant } = require("./products.utils");
 
 const PRODUCT_UPDATABLE_FIELDS = [
@@ -184,6 +185,39 @@ async function updateProduct(id, input) {
     await assertActiveCategory(data.categoryId);
   }
 
+  // Deactivation transition (active → inactive) goes through the guarded
+  // path: the in-process order check and the state change run inside one
+  // transaction. Any other fields in the same request are applied
+  // afterwards; reactivation (isActive true) needs no eligibility check.
+  if (data.isActive === false && existing.isActive === true) {
+    const rest = { ...data };
+    delete rest.isActive;
+    let row;
+    try {
+      row = await productsRepository.deactivateProductGuarded(id, ORDER_IN_PROCESS_STATUSES);
+    } catch (err) {
+      if (err.code === "P2025") {
+        throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
+      }
+      throw err;
+    }
+    if (Object.keys(rest).length === 0) {
+      return toSafeProduct(row);
+    }
+    try {
+      const updated = await productsRepository.updateProduct(id, rest);
+      return toSafeProduct(updated);
+    } catch (err) {
+      if (err.code === "P2002") {
+        throw new AppError(409, "PRODUCT_SLUG_EXISTS", "Product slug already exists");
+      }
+      if (err.code === "P2025") {
+        throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
+      }
+      throw err;
+    }
+  }
+
   try {
     const row = await productsRepository.updateProduct(id, data);
     return toSafeProduct(row);
@@ -198,10 +232,25 @@ async function updateProduct(id, input) {
   }
 }
 
+/**
+ * Product removal (`DELETE /products/:id`). Lifecycle rule: an ACTIVE
+ * product must be deactivated first — deletion of an active product is
+ * rejected with 409 and the product is left unchanged. An already
+ * inactive product follows the existing deletion semantics
+ * (idempotent soft-deactivate confirmation). Historical order data is
+ * never touched.
+ */
 async function deactivateProduct(id) {
   const existing = await productsRepository.findProductById(id);
   if (!existing) {
     throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
+  }
+  if (existing.isActive) {
+    throw new AppError(
+      409,
+      "PRODUCT_ACTIVE_CANNOT_DELETE",
+      `Cannot delete "${existing.name}" while it is active. Deactivate it first, then delete.`
+    );
   }
   const row = await productsRepository.deactivateProduct(id);
   return toSafeProduct(row);

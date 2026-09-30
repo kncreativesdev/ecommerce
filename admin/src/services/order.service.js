@@ -30,14 +30,17 @@ import { apiGet, apiGetPage, apiPatch } from '../lib/apiClient.js';
  *   Responses include authoritative `statusHistory[]` (oldest-first:
  *   `{ id, status, previousStatus, note, createdAt }`; legacy orders carry
  *   `[]` — never invented client-side). `CANCELLED` atomically restores
- *   checkout-decremented stock with `ORDER_CANCELLED` ledger rows.
+ *   checkout-decremented stock with `ORDER_CANCELLED` ledger rows AND
+ *   moves the order's payments to `CANCELLED` in the same transaction.
  *   Cancellation IS this endpoint with `{ status: 'CANCELLED' }` — there
  *   is no separate cancel route.
  * - `PATCH /orders/admin/:id/payment { status }` → `200 { order }`.
  *   Status-only mutation of the latest payment row (backend
  *   `PAYMENT_STATUS_TRANSITIONS`); illegal moves → `409
- *   PAYMENT_INVALID_STATUS_TRANSITION`. No gateway exists: `REFUNDED`
- *   records a manual refund, it does not process a payout.
+ *   PAYMENT_INVALID_STATUS_TRANSITION`. A `CANCELLED` payment is terminal
+ *   (written only by order cancellation) and cannot be moved. No gateway
+ *   exists: `REFUNDED` records a manual refund, it does not process a
+ *   payout.
  *
  * Totals are server-authoritative strings — the admin renders them, never
  * recomputes them. The admin never mutates inventory directly.

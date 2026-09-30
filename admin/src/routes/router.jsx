@@ -9,6 +9,8 @@ import { ProductNewPage } from '../pages/ProductNewPage.jsx';
 import { ProductEditPage } from '../pages/ProductEditPage.jsx';
 import { OrdersPage } from '../pages/OrdersPage.jsx';
 import { OrderDetailPage } from '../pages/OrderDetailPage.jsx';
+import { ReturnsPage } from '../pages/ReturnsPage.jsx';
+import { ReturnDetailPage } from '../pages/ReturnDetailPage.jsx';
 import { CustomersPage } from '../pages/CustomersPage.jsx';
 import { CustomerDetailPage } from '../pages/CustomerDetailPage.jsx';
 import { ReviewsPage } from '../pages/ReviewsPage.jsx';
@@ -41,6 +43,8 @@ export const router = createBrowserRouter([
           { path: '/catalog/products/:id/edit', element: <ProductEditPage /> },
           { path: '/orders', element: <OrdersPage /> },
           { path: '/orders/:id', element: <OrderDetailPage /> },
+          { path: '/returns', element: <ReturnsPage /> },
+          { path: '/returns/:id', element: <ReturnDetailPage /> },
           { path: '/inventory', element: <InventoryPage /> },
           { path: '/customers', element: <CustomersPage /> },
           { path: '/customers/:id', element: <CustomerDetailPage /> },

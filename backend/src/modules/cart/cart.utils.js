@@ -27,7 +27,10 @@ function centsToString(cents) {
 function pickDisplayImage(variantImages, productImages) {
   const ordered = (list) => [...(list || [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   const vImages = ordered(variantImages);
-  const pImages = ordered(productImages);
+  // Product fallback is legacy product-level media only (variantId null) —
+  // sibling-variant images must never leak into an imageless variant's
+  // display image. Mirrors the storefront `productLevelImages` partition.
+  const pImages = ordered((productImages || []).filter((image) => image?.variantId == null));
   const pick = vImages.find((image) => image.isPrimary) ?? vImages[0] ?? null;
   if (pick) return pick;
   return pImages.find((image) => image.isPrimary) ?? pImages[0] ?? null;

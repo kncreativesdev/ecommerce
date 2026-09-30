@@ -97,13 +97,30 @@ function orderStatusNotification(orderNumber, status) {
  * - PAID → REFUNDED (manual refund recorded; no gateway integration)
  * - REFUNDED is terminal. There is no online capture — REFUNDED is a
  *   recorded state, not a processed payout.
+ * - CANCELLED is terminal and written ONLY by the atomic order-
+ *   cancellation transaction (order → CANCELLED also moves its payments
+ *   to CANCELLED in the same transaction). The standalone payment-status
+ *   endpoint can never produce or leave CANCELLED.
  */
 const PAYMENT_STATUS_TRANSITIONS = {
   PENDING: ["PAID", "FAILED"],
   FAILED: ["PAID"],
   PAID: ["REFUNDED"],
   REFUNDED: [],
+  CANCELLED: [],
 };
+
+/**
+ * Order statuses that count as genuinely still in process (single
+ * definition — product deactivation eligibility reuses this exact set).
+ * Terminal states never block deactivation: CANCELLED (cancelled orders
+ * stop blocking), DELIVERED and COMPLETED (fulfilled history stays valid
+ * but no longer in process). Legacy SHIPPED remains in-process (it still
+ * moves forward via the compatibility path).
+ */
+const ORDER_IN_PROCESS_STATUSES = Object.keys(ORDER_STATUS_TRANSITIONS).filter(
+  (status) => status !== "CANCELLED" && status !== "DELIVERED" && status !== "COMPLETED"
+);
 
 const ADMIN_DEFAULT_PAGE = 1;
 const ADMIN_DEFAULT_LIMIT = 20;
@@ -177,6 +194,21 @@ async function createOrder(userId, input) {
     }
   }
 
+  // COD orders need a customer contact number. The authoritative source is
+  // the customer profile (`User.phone`), not the request body (the DTO is
+  // strict ids-only) and not the shipping address (per-address contact,
+  // snapshotted independently). Enforced here — before coupon validation
+  // and the order transaction — so a missing phone never reserves
+  // inventory, consumes coupons, or partially writes order data.
+  const customer = await ordersRepository.findCustomerPhoneById(userId);
+  if (!customer || typeof customer.phone !== "string" || customer.phone.trim() === "") {
+    throw new AppError(
+      422,
+      "ORDER_PHONE_REQUIRED",
+      "A phone number is required to place an order. Please add one to your profile."
+    );
+  }
+
   // Optional coupon: validated ONCE here against the current cart (fresh,
   // authoritative quote). The discount amount and coupon id ride into the
   // transaction; usage is consumed INSIDE it so failed orders never
@@ -237,6 +269,61 @@ async function getOrder(userId, id) {
     throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
   }
   return toSafeOrder(row);
+}
+
+/**
+ * Customer self-cancellation. Same authoritative lifecycle rule as admin
+ * cancellation (ORDER_STATUS_TRANSITIONS — CANCELLED only from PENDING,
+ * CONFIRMED, PROCESSING) and the same atomic transaction (status +
+ * payment cancellation + history + notification + inventory restore).
+ * Ownership is enforced by the owner-scoped read: missing rows and other
+ * users' orders are both 404 ORDER_NOT_FOUND, never distinguished.
+ */
+async function cancelOrder(userId, id) {
+  const current = await ordersRepository.findOrderByIdAndUserId(id, userId);
+  if (!current) {
+    throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
+  }
+  if (current.status === "CANCELLED") {
+    throw new AppError(
+      409,
+      "ORDER_STATUS_UNCHANGED",
+      "Order is already CANCELLED. No update was applied."
+    );
+  }
+  const allowed = ORDER_STATUS_TRANSITIONS[current.status] ?? [];
+  if (!allowed.includes("CANCELLED")) {
+    const hint =
+      allowed.length > 0
+        ? `Allowed next states from ${current.status}: ${allowed.join(", ")}.`
+        : `${current.status} is terminal and cannot change.`;
+    throw new AppError(
+      409,
+      "ORDER_INVALID_STATUS_TRANSITION",
+      `Cannot cancel order from ${current.status}. ${hint}`
+    );
+  }
+  const result = await ordersRepository.updateOrderStatusTransaction(
+    id,
+    current.status,
+    "CANCELLED",
+    {
+      note: null,
+      createdBy: userId,
+      notification: orderStatusNotification(current.orderNumber, "CANCELLED"),
+    }
+  );
+  if (result.outcome === "missing") {
+    throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
+  }
+  if (result.outcome === "conflict") {
+    throw new AppError(
+      409,
+      "ORDER_CONCURRENT_UPDATE",
+      `Order changed while updating (now ${result.status}). Reload and retry.`
+    );
+  }
+  return getOrder(userId, id);
 }
 
 async function listOrdersAdmin(query) {
@@ -438,6 +525,7 @@ module.exports = {
   createOrder,
   listOrders,
   getOrder,
+  cancelOrder,
   listOrdersAdmin,
   getOrderAdmin,
   updateOrderStatusAdmin,
@@ -445,6 +533,7 @@ module.exports = {
   updateOrderPaymentStatusAdmin,
   ORDER_STATUS_TRANSITIONS,
   ORDER_STATUS_SEQUENCE,
+  ORDER_IN_PROCESS_STATUSES,
   PAYMENT_STATUS_TRANSITIONS,
   normalizeLifecycleStatus,
   orderStatusNotification,

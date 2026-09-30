@@ -44,6 +44,19 @@ export function displayImageForVariant(allImages, variantId) {
 }
 
 /**
+ * Product-level primary image across ALL images of the product (every
+ * variant plus legacy `variantId: null` rows), lowest `sortOrder` winning
+ * ties. Returns `null` when no explicit primary exists — unlike
+ * `primaryImageFor`, it never falls back to the first ordered image, so
+ * callers can distinguish "explicit primary" from "needs fallback".
+ */
+export function productPrimaryImage(allImages) {
+  const list = bySortOrder(Array.isArray(allImages) ? allImages : []);
+  if (list.length === 0) return null;
+  return list.find((image) => image?.isPrimary) ?? null;
+}
+
+/**
  * Deterministic product-card image rule (no customer-selected variant yet).
  *
  * Priority, in order — never random, never a sibling variant's image:
@@ -63,4 +76,22 @@ export function getDefaultVariantImage(allImages, product) {
   const variants = Array.isArray(product?.variants) ? product.variants : [];
   const defaultVariant = variants.find((variant) => variant?.isActive !== false) ?? null;
   return displayImageForVariant(allImages, defaultVariant?.id ?? null);
+}
+
+/**
+ * Product-card image rule (single product-level primary).
+ *
+ * Priority:
+ * 1. the persisted product-level primary image — whichever variant (or
+ *    legacy `variantId: null` row) owns it;
+ * 2. the legacy default-variant fallback (`getDefaultVariantImage`) for
+ *    products with no explicit primary;
+ * 3. `null` → callers render the generic placeholder.
+ *
+ * The PDP gallery (`galleryForVariant`) stays variant-aware and is
+ * unaffected: a card may show another variant's primary image, but a
+ * variant gallery never leaks sibling images.
+ */
+export function getProductCardImage(allImages, product) {
+  return productPrimaryImage(allImages) ?? getDefaultVariantImage(allImages, product);
 }

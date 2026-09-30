@@ -33,6 +33,12 @@ import { apiDelete, apiGet, apiGetPage, apiPatch, apiPost } from '../lib/apiClie
  * - `DELETE /coupons/:id` (ADMIN) → `200 { id, message }`. Hard delete;
  *   refused with `409 COUPON_IN_USE` once `usedCount > 0` (deactivate
  *   instead). Orders never reference coupons, so history is unaffected.
+ * - `GET /coupons/:id/history` (ADMIN) → `200 { history[] } + meta`.
+ *   Admin lifecycle audit (CREATED / UPDATED / DEACTIVATED / REACTIVATED /
+ *   DELETED), newest first. Each row: `{ id, couponId, action,
+ *   actor: { id, email }, metadata, createdAt }`. Unknown ids →
+ *   `404 COUPON_NOT_FOUND`. Customer coupon usage is NOT here —
+ *   `CouponUsage` remains its source of truth.
  *
  * Coupon shape: `{ id, code, description, discountType, discountValue,
  * minimumOrderAmount, maximumDiscountAmount, usageLimit, usedCount,
@@ -82,4 +88,19 @@ export function activateCoupon(id) {
  */
 export function deleteCoupon(id) {
   return apiDelete(`/coupons/${id}`).then((data) => data ?? null);
+}
+
+/**
+ * Admin lifecycle audit for one coupon (newest first). Same envelope
+ * convention as the coupon list: rows in `data.history`, pagination in
+ * top-level `meta` (hence `apiGetPage`).
+ */
+export function fetchCouponHistory(id, { page = 1, limit = 20 } = {}) {
+  const params = new URLSearchParams();
+  params.set('page', String(page));
+  params.set('limit', String(limit));
+  return apiGetPage(`/coupons/${id}/history?${params.toString()}`).then(({ data, meta }) => ({
+    history: Array.isArray(data?.history) ? data.history : [],
+    pagination: meta ?? { page, limit, total: 0, totalPages: 1 },
+  }));
 }

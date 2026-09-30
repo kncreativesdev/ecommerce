@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { ChevronRight, Minus, PackageSearch, Plus, ShoppingCart, Zap } from 'lucide-react';
+import { Check, ChevronRight, Minus, PackageSearch, Plus, ShoppingCart, Zap } from 'lucide-react';
 import { Container } from '../components/ui/Container.jsx';
 import { EmptyState } from '../components/ui/EmptyState.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
@@ -48,11 +48,30 @@ export function ProductDetailPage() {
   // = unknown/loading, `null` = none or unavailable; failures stay silent
   // so the hint can never break the page.
   const [ownReview, setOwnReview] = useState(undefined);
-  // Public approved reviews for the PDP (`GET /reviews/product/:productId`,
+  // Public product reviews for the PDP (`GET /reviews/product/:productId`,
   // backend truth — never fake). `null` = loading, `[]` = none (empty
-  // state), array = approved reviews newest-first.
+  // state), array = reviews newest-first (no approval gate).
   const [productReviews, setProductReviews] = useState(null);
   const [reviewsError, setReviewsError] = useState(null);
+  // Transient "Added" confirmation for Add to Cart (UI-local only, never
+  // persisted). `adding` guards the in-flight request; `addedFor` records
+  // which variant the confirmation belongs to. The visible `added` flag is
+  // derived further below (never stored), so switching variants/products
+  // can never leak a stale confirmation.
+  const [adding, setAdding] = useState(false);
+  const [addedFor, setAddedFor] = useState(null);
+  const addedTimer = useRef(null);
+
+  // Timer cleanup on unmount — never update state after unmount.
+  useEffect(
+    () => () => {
+      if (addedTimer.current) {
+        clearTimeout(addedTimer.current);
+        addedTimer.current = null;
+      }
+    },
+    [],
+  );
   // Reset to loading on product change via render-time adjustment (not
   // setState-in-effect); the fetch effect below only resolves async.
   const [prevReviewProductId, setPrevReviewProductId] = useState(product?.id ?? null);
@@ -163,6 +182,9 @@ export function ProductDetailPage() {
   // Variant-specific availability from backend inventory truth (selected
   // variant — never the whole product as one bucket).
   const stockState = getVariantStockState(selected);
+  // Derived confirmation: visible only for the variant that was just
+  // added. Switching variants/products hides it without any effect.
+  const added = addedFor !== null && addedFor === selected?.id;
 
   const handleAdd = async ({ buyNow = false } = {}) => {
     if (!selected) {
@@ -175,18 +197,27 @@ export function ProductDetailPage() {
       toast.error('This product is out of stock.');
       return;
     }
-    const result = await addItem({
-      variantId: selected.id,
-      quantity,
-      snapshot: {
-        productId: product.id,
-        productName: product.name,
-        productSlug: product.slug,
-        variantName: selected.name,
-        sku: selected.sku,
-        unitPrice: selected.price,
-      },
-    });
+    // No concurrent adds and no re-add during the confirmation window
+    // (Buy Now navigates away, so it never shows the confirmation).
+    if (adding || (added && !buyNow)) return;
+    setAdding(true);
+    let result;
+    try {
+      result = await addItem({
+        variantId: selected.id,
+        quantity,
+        snapshot: {
+          productId: product.id,
+          productName: product.name,
+          productSlug: product.slug,
+          variantName: selected.name,
+          sku: selected.sku,
+          unitPrice: selected.price,
+        },
+      });
+    } finally {
+      setAdding(false);
+    }
     if (!result.ok) {
       if (result.error?.code === 'INSUFFICIENT_STOCK' || result.error?.status === 409) {
         // Stale UI state (said in-stock, backend says unavailable).
@@ -202,6 +233,13 @@ export function ProductDetailPage() {
       navigate('/checkout');
     } else {
       toast.success(`${product.name} added to cart.`);
+      // Success-only 2-second confirmation, then back to normal.
+      setAddedFor(selected.id);
+      if (addedTimer.current) clearTimeout(addedTimer.current);
+      addedTimer.current = setTimeout(() => {
+        addedTimer.current = null;
+        setAddedFor(null);
+      }, 2000);
     }
   };
 
@@ -333,12 +371,22 @@ export function ProductDetailPage() {
               <button
                 type="button"
                 onClick={() => handleAdd()}
-                disabled={bulkPending || !selected}
-                aria-busy={bulkPending}
+                disabled={bulkPending || adding || added || !selected}
+                aria-busy={bulkPending || adding}
+                aria-live="polite"
                 className="inline-flex min-h-[48px] cursor-pointer items-center justify-center gap-2 rounded-xl border border-border bg-surface px-4 text-sm font-semibold text-secondary-foreground transition-colors duration-200 hover:bg-surface-muted disabled:cursor-wait disabled:opacity-60"
               >
-                <ShoppingCart size={17} aria-hidden="true" />
-                Add to Cart
+                {added ? (
+                  <>
+                    <Check size={17} aria-hidden="true" />
+                    Added
+                  </>
+                ) : (
+                  <>
+                    <ShoppingCart size={17} aria-hidden="true" />
+                    {adding ? 'Adding…' : 'Add to Cart'}
+                  </>
+                )}
               </button>
               <button
                 type="button"
@@ -448,11 +496,21 @@ export function ProductDetailPage() {
           <button
             type="button"
             onClick={() => handleAdd()}
-            disabled={bulkPending || !selected}
+            disabled={bulkPending || adding || added || !selected}
+            aria-live="polite"
             className="inline-flex min-h-[48px] flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity duration-200 hover:opacity-90 disabled:cursor-wait disabled:opacity-60"
           >
-            <ShoppingCart size={17} aria-hidden="true" />
-            Add to Cart
+            {added ? (
+              <>
+                <Check size={17} aria-hidden="true" />
+                Added
+              </>
+            ) : (
+              <>
+                <ShoppingCart size={17} aria-hidden="true" />
+                {adding ? 'Adding…' : 'Add to Cart'}
+              </>
+            )}
           </button>
         </div>
       </div>

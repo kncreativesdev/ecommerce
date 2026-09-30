@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pencil, Plus, Power, RotateCcw, Search, TicketPercent, Trash2, X } from 'lucide-react';
+import { History, Pencil, Plus, Power, RotateCcw, Search, TicketPercent, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCouponStore } from '../stores/useCouponStore.js';
+import { CouponHistory } from '../components/catalog/CouponHistory.jsx';
 import {
   COUPON_SCOPES,
   COUPON_STATUS_TONES,
@@ -77,8 +78,16 @@ export function CouponsPage() {
   const [searchDraft, setSearchDraft] = useState(search);
   const [deactivating, setDeactivating] = useState(null); // coupon | null
   const [deleting, setDeleting] = useState(null); // coupon | null
+  const [historyCoupon, setHistoryCoupon] = useState(null); // coupon | null
   const [mutating, setMutating] = useState(false);
   const [activatingId, setActivatingId] = useState(null);
+
+  // Stable modal close handler: Modal focuses itself whenever its onClose
+  // identity changes, so an inline arrow would steal focus on every parent
+  // render (same pattern as the inventory history modal).
+  const closeHistory = useCallback(() => {
+    setHistoryCoupon(null);
+  }, []);
 
   useEffect(() => {
     document.title = 'Coupons — Tech Pulse Admin';
@@ -160,13 +169,18 @@ export function CouponsPage() {
         title="Coupons"
         meta={meta}
         actions={
-          <Link
-            to="/catalog/coupons/new"
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
-          >
-            <Plus size={17} aria-hidden="true" />
-            Add Coupon
-          </Link>
+          <>
+            <Button variant="secondary" size="sm" onClick={() => refreshCoupons()} disabled={controlsDisabled}>
+              Refresh
+            </Button>
+            <Link
+              to="/catalog/coupons/new"
+              className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
+            >
+              <Plus size={17} aria-hidden="true" />
+              Add Coupon
+            </Link>
+          </>
         }
       />
 
@@ -289,6 +303,15 @@ export function CouponsPage() {
                       >
                         <Pencil size={17} aria-hidden="true" />
                       </Link>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryCoupon(coupon)}
+                        aria-label={`View coupon history for ${coupon.code}`}
+                        title="Coupon history"
+                        className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-surface-muted hover:text-foreground"
+                      >
+                        <History size={17} aria-hidden="true" />
+                      </button>
                       {coupon.isActive ? (
                         <button
                           type="button"
@@ -357,11 +380,11 @@ export function CouponsPage() {
         />
       )}
 
-      <div className="flex justify-start">
-        <Button variant="secondary" onClick={() => refreshCoupons()} disabled={controlsDisabled}>
-          Refresh list
-        </Button>
-      </div>
+      {historyCoupon ? (
+        <Modal title={`Coupon history — ${historyCoupon.code}`} onClose={closeHistory}>
+          <CouponHistory key={historyCoupon.id} couponId={historyCoupon.id} />
+        </Modal>
+      ) : null}
 
       {deactivating ? (
         <Modal title={`Deactivate “${deactivating.code}”?`} onClose={() => !mutating && setDeactivating(null)} persistent={mutating}>

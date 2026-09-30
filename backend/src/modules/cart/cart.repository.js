@@ -11,7 +11,7 @@ const VARIANT_FOR_CART_SELECT = {
 
 const CART_IMAGE_SELECT = {
   orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  select: { storagePath: true, altText: true, sortOrder: true, isPrimary: true },
+  select: { storagePath: true, altText: true, sortOrder: true, isPrimary: true, variantId: true },
 };
 
 const CART_ITEM_WITH_VARIANT_SELECT = {

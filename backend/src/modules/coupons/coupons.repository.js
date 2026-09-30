@@ -1,4 +1,5 @@
 const { prisma } = require("../../config/database");
+const { toAuditSnapshot } = require("./coupons.utils");
 
 const COUPON_SELECT = {
   id: true,
@@ -80,7 +81,35 @@ async function findExistingProductIds(ids) {
   return rows.map((row) => row.id);
 }
 
-async function createCouponRecord(data, productIds) {
+/**
+ * Append-only admin audit write. Always called on a coupon-mutation
+ * transaction client so the history row commits or rolls back WITH the
+ * mutation — never fire-and-forget. The actor email is snapshotted here
+ * (same transaction) so the record stays readable even if the admin is
+ * later deleted (no hard FK, same convention as OrderStatusHistory).
+ */
+async function writeHistoryTx(tx, { couponId, actorId, action, metadata }) {
+  let actorEmail = null;
+  if (actorId) {
+    const actor = await tx.user.findUnique({
+      where: { id: actorId },
+      select: { email: true },
+    });
+    actorEmail = actor ? actor.email : null;
+  }
+  await tx.couponHistory.create({
+    data: {
+      couponId,
+      actorId: actorId ?? null,
+      actorEmail,
+      action,
+      metadata: metadata ?? null,
+    },
+    select: { id: true },
+  });
+}
+
+async function createCouponRecord(data, productIds, audit) {
   return prisma.$transaction(async (tx) => {
     const coupon = await tx.coupon.create({
       data,
@@ -91,11 +120,14 @@ async function createCouponRecord(data, productIds) {
         data: productIds.map((productId) => ({ couponId: coupon.id, productId })),
       });
     }
+    if (audit) {
+      await writeHistoryTx(tx, { couponId: coupon.id, ...audit });
+    }
     return coupon.id;
   });
 }
 
-async function updateCouponRecord(id, data, productIds) {
+async function updateCouponRecord(id, data, productIds, audit) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.coupon.findUnique({
       where: { id },
@@ -115,15 +147,32 @@ async function updateCouponRecord(id, data, productIds) {
         });
       }
     }
+    if (audit) {
+      await writeHistoryTx(tx, { couponId: id, ...audit });
+    }
     return { outcome: "ok" };
   });
 }
 
-async function deleteCouponRecord(id) {
+async function deleteCouponRecord(id, audit) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.coupon.findUnique({
       where: { id },
-      select: { id: true, usedCount: true },
+      select: {
+        id: true,
+        code: true,
+        description: true,
+        discountType: true,
+        discountValue: true,
+        minimumOrderAmount: true,
+        maximumDiscountAmount: true,
+        usageLimit: true,
+        usedCount: true,
+        startsAt: true,
+        expiresAt: true,
+        isActive: true,
+        products: { select: { productId: true } },
+      },
     });
     if (!existing) {
       return { outcome: "missing" };
@@ -132,9 +181,50 @@ async function deleteCouponRecord(id) {
       return { outcome: "in-use", usedCount: existing.usedCount };
     }
     // Product links cascade via FK; orders never reference coupons, so no
-    // historical discount data is affected.
+    // historical discount data is affected. The audit row is written BEFORE
+    // the delete in the same transaction; the history table is FK-free so
+    // the DELETED record survives the coupon row.
+    if (audit) {
+      await writeHistoryTx(tx, {
+        couponId: id,
+        actorId: audit.actorId,
+        action: audit.action,
+        metadata: { snapshot: toAuditSnapshot(existing) },
+      });
+    }
     await tx.coupon.delete({ where: { id } });
     return { outcome: "ok" };
+  });
+}
+
+const COUPON_HISTORY_SELECT = {
+  id: true,
+  couponId: true,
+  actorId: true,
+  actorEmail: true,
+  action: true,
+  metadata: true,
+  createdAt: true,
+};
+
+async function findCouponHistory(couponId, { skip, take }) {
+  return prisma.couponHistory.findMany({
+    where: { couponId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip,
+    take,
+    select: COUPON_HISTORY_SELECT,
+  });
+}
+
+async function countCouponHistory(couponId) {
+  return prisma.couponHistory.count({ where: { couponId } });
+}
+
+async function findUsageByCouponAndUser(couponId, userId) {
+  return prisma.couponUsage.findUnique({
+    where: { couponId_userId: { couponId, userId } },
+    select: { id: true },
   });
 }
 
@@ -183,14 +273,41 @@ async function consumeUsageWith(client, couponId) {
   return { outcome: "ok", usedCount: updated.usedCount };
 }
 
+/**
+ * One-time-per-customer ledger write for checkout: executed on the order
+ * transaction client with the created order id, so usage exists only for
+ * successfully committed orders. The UNIQUE (couponId, userId) pair is the
+ * concurrency guard — a duplicate insert surfaces P2002, mapped here to
+ * "already-used" so concurrent same-customer orders deterministically
+ * leave at most one winner.
+ */
+async function recordUsageTx(tx, { couponId, userId, orderId }) {
+  try {
+    await tx.couponUsage.create({
+      data: { couponId, userId, orderId },
+      select: { id: true },
+    });
+    return { outcome: "ok" };
+  } catch (err) {
+    if (err.code === "P2002") {
+      return { outcome: "already-used" };
+    }
+    throw err;
+  }
+}
+
 module.exports = {
   findCouponByCode,
   findCouponById,
+  findUsageByCouponAndUser,
+  recordUsageTx,
   findCouponsAdmin,
   findExistingProductIds,
   createCouponRecord,
   updateCouponRecord,
   deleteCouponRecord,
+  findCouponHistory,
+  countCouponHistory,
   tryConsumeUsage,
   tryConsumeUsageTx,
 };

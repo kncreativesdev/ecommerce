@@ -22,6 +22,10 @@ router.patch(
 
 router.post("/", authenticate, ordersController.create);
 router.get("/", authenticate, ordersController.list);
+// Customer self-cancellation (ownership + lifecycle enforced in service).
+// Declared before `/:id` so the literal `cancel` action segment is never
+// captured as an order id.
+router.post("/:id/cancel", authenticate, ordersController.cancel);
 router.get("/:id", authenticate, ordersController.getById);
 
 module.exports = router;

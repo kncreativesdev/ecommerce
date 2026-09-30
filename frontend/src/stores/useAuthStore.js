@@ -3,6 +3,7 @@ import { isSessionInvalidError, setAuthHandler, sharedRefresh } from '../lib/api
 import { resetGuestSync, syncGuestAfterAuth } from '../lib/guestSync.js';
 import {
   fetchCurrentUser,
+  googleSignInRequest,
   loginRequest,
   logoutRequest,
   refreshRequest,
@@ -101,6 +102,34 @@ export const useAuthStore = create((set, get) => ({
       await registerRequest(input);
       // Backend register returns `data.user` with no token — auto-login.
       return await get().login({ email: input.email, password: input.password });
+    } catch (error) {
+      set({ accessToken: null, user: null, status: 'ready', lastError: error });
+      return { ok: false, error };
+    }
+  },
+
+  /**
+   * Google sign-in: the Google button supplies a GIS ID token, the
+   * backend verifies it and returns the standard session shape, so the
+   * rest is identical to password login (same mirrors, same errors).
+   */
+  loginWithGoogle: async (idToken) => {
+    set({ status: 'loading', lastError: null });
+    try {
+      const data = await googleSignInRequest({ idToken });
+      const user = data?.user ?? null;
+      const accessToken = data?.accessToken ?? null;
+      if (!user || !accessToken) {
+        throw new Error('Google sign-in did not return a session.');
+      }
+      get().setSession(accessToken, user);
+      try {
+        const me = await fetchCurrentUser();
+        if (me) set({ user: me });
+      } catch {
+        /* Login session stands; `me` refreshes opportunistically. */
+      }
+      return { ok: true };
     } catch (error) {
       set({ accessToken: null, user: null, status: 'ready', lastError: error });
       return { ok: false, error };

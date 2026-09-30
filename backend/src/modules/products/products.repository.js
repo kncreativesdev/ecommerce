@@ -1,4 +1,5 @@
 const { prisma } = require("../../config/database");
+const { AppError } = require("../../utils/appError");
 
 const VARIANT_SELECT = {
   id: true,
@@ -124,6 +125,72 @@ async function deactivateProduct(id) {
   });
 }
 
+/**
+ * Guarded deactivation: eligibility check + state change in ONE database
+ * transaction so a concurrent order/status operation cannot invalidate
+ * the check between read and write. Throws 404 when the product is
+ * missing and 409 PRODUCT_HAS_ACTIVE_ORDERS (with safe blocking-order
+ * details, product untouched) when an in-process order still contains
+ * the product. Only safe order identifiers (number + status) are read —
+ * never customer data. Historical snapshots, inventory, cart, wishlist,
+ * reviews, payments, and notifications are never touched here; order
+ * status is the source of truth and order items are never mutated.
+ */
+async function deactivateProductGuarded(id, inProcessStatuses) {
+  return prisma.$transaction(async (tx) => {
+    const product = await tx.product.findUnique({
+      where: { id },
+      select: { id: true, name: true, isActive: true },
+    });
+    if (!product) {
+      throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
+    }
+    if (!product.isActive) {
+      return tx.product.findUniqueOrThrow({
+        where: { id },
+        select: productShape(false),
+      });
+    }
+    const blockingWhere = {
+      productId: id,
+      order: { status: { in: inProcessStatuses } },
+    };
+    const [sample, grouped] = await Promise.all([
+      tx.orderItem.findMany({
+        where: blockingWhere,
+        orderBy: { createdAt: "asc" },
+        take: 5,
+        distinct: ["orderId"],
+        select: {
+          order: { select: { orderNumber: true, status: true } },
+        },
+      }),
+      tx.orderItem.groupBy({
+        by: ["orderId"],
+        where: blockingWhere,
+      }),
+    ]);
+    if (grouped.length > 0) {
+      const blockingOrders = sample.map((row) => ({
+        orderNumber: row.order.orderNumber,
+        status: row.order.status,
+      }));
+      const listed = blockingOrders.map((entry) => `${entry.orderNumber} (${entry.status})`).join(", ");
+      throw new AppError(
+        409,
+        "PRODUCT_HAS_ACTIVE_ORDERS",
+        `Cannot deactivate "${product.name}" while it is in ${grouped.length} active order${grouped.length === 1 ? "" : "s"} (${listed}${grouped.length > blockingOrders.length ? ", …" : ""}). Cancel or complete those orders first.`,
+        { blockingOrderCount: grouped.length, blockingOrders }
+      );
+    }
+    return tx.product.update({
+      where: { id },
+      data: { isActive: false },
+      select: productShape(false),
+    });
+  });
+}
+
 async function findVariantByIdAndProductId(variantId, productId) {
   return prisma.productVariant.findFirst({
     where: { id: variantId, productId },
@@ -162,6 +229,7 @@ module.exports = {
   createProductWithVariants,
   updateProduct,
   deactivateProduct,
+  deactivateProductGuarded,
   findVariantByIdAndProductId,
   createVariant,
   updateVariant,

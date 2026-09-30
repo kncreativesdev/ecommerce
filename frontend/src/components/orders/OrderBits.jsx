@@ -124,6 +124,37 @@ export function OrderLink({ orderId, label = 'View details' }) {
 }
 
 /**
+ * Applied-coupon summary from the server order record (`order.coupon`
+ * brief + snapshotted `discountTotal`). Renders nothing when no coupon
+ * was used (legacy or full-price orders) — the totals block already
+ * hides the discount row in that case.
+ */
+export function OrderCoupon({ order }) {
+  const coupon = order?.coupon ?? null;
+  if (!coupon?.code) return null;
+  const offer =
+    coupon.discountType === 'PERCENTAGE'
+      ? `${parseFloat(coupon.discountValue) || 0}% off`
+      : `${formatINR(coupon.discountValue)} off`;
+  return (
+    <div role="group" aria-label="Coupon applied" className="flex flex-col gap-1 rounded-xl bg-surface-muted/60 px-4 py-3 text-sm">
+      <p className="text-foreground">
+        Coupon applied: <span className="font-mono font-bold">{coupon.code}</span>
+        <span className="text-muted-foreground"> · {offer}</span>
+      </p>
+      {coupon.description ? (
+        <p className="text-xs leading-5 text-muted-foreground">{coupon.description}</p>
+      ) : null}
+      {order?.discountTotal != null && order.discountTotal !== '0.00' ? (
+        <p className="font-bold tabular-nums text-success">
+          You saved −{formatINR(order.discountTotal)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Historical purchased-variant thumbnail from the order snapshot
  * (`imageStoragePath`, immutable). Pre-snapshot orders carry null and
  * render the neutral placeholder — live variant media is never consulted

@@ -91,6 +91,17 @@ const adminCouponListQuerySchema = z
   })
   .strip();
 
+/**
+ * Admin history query: pagination only (same bounds/shape as the list
+ * query). Unknown params are stripped so links/caches never 422.
+ */
+const couponHistoryQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).max(10000).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+  })
+  .strip();
+
 module.exports = {
   normalizeCouponCode,
   couponCodeSchema,
@@ -103,4 +114,5 @@ module.exports = {
   couponIdParamSchema,
   validateCouponRequestSchema,
   adminCouponListQuerySchema,
+  couponHistoryQuerySchema,
 };

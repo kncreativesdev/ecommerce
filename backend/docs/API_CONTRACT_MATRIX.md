@@ -36,6 +36,7 @@ endpoints, fields, status codes, or rules.
 | Health | GET | `/health` | no | — | — | 200 | — | Liveness probe |
 | Auth | POST | `/auth/register` | no | — | email, password 8–128, firstName?, lastName?, phone? | 201 | 409 AUTH_EMAIL_ALREADY_EXISTS, 422, 429 | Always CUSTOMER role |
 | Auth | POST | `/auth/login` | no | — | email, password | 200 | 401 AUTH_INVALID_CREDENTIALS, 403 AUTH_ACCOUNT_INACTIVE, 422, 429 | Sets refresh cookie |
+| Auth | POST | `/auth/google` | no | — | `{ idToken }` (Google Identity Services ID token) | 200 | 401 AUTH_GOOGLE_INVALID_TOKEN, 403 AUTH_ACCOUNT_INACTIVE, 422, 429, 503 AUTH_GOOGLE_NOT_CONFIGURED/AUTH_GOOGLE_UNAVAILABLE | Verifies with Google, links by verified email (creates CUSTOMER if new), sets refresh cookie |
 | Auth | POST | `/auth/refresh` | cookie | — | refresh cookie only | 200 | 401 AUTH_REFRESH_TOKEN_INVALID, 429 | Rotates refresh token |
 | Auth | POST | `/auth/logout` | no | — | — | 200 | — | Clears refresh cookie |
 | Auth | GET | `/auth/me` | yes | — | — | 200 | 401 | Own identity |
@@ -59,8 +60,8 @@ endpoints, fields, status codes, or rules.
 | Products | GET | `/products` | no | — | `?status=active\|inactive\|all` (default active) | 200 | 422 on invalid status | Active only by default; `inactive`/`all` require ADMIN |
 | Products | GET | `/products/:id` | no | — | id param, `?status=active\|all` (default active) | 200 | 404 PRODUCT_NOT_FOUND | Active only by default; `all` requires ADMIN |
 | Products | POST | `/products` | yes | ADMIN | product + variants? | 201 | 401, 403, 404 CATEGORY_NOT_FOUND, 409 PRODUCT_SLUG_EXISTS/SKU/BARCODE, 422 | Prices are decimal strings |
-| Products | PATCH | `/products/:id` | yes | ADMIN | partial fields | 200 | 401, 403, 404, 409, 422 PRODUCT_UPDATE_INVALID | — |
-| Products | DELETE | `/products/:id` | yes | ADMIN | — | 200 | 401, 403, 404 | Deactivates |
+| Products | PATCH | `/products/:id` | yes | ADMIN | partial fields | 200 | 401, 403, 404, 409, 422 PRODUCT_UPDATE_INVALID | Deactivation (`isActive: false` on an active product) is rejected with 409 PRODUCT_HAS_ACTIVE_ORDERS while an in-process order contains the product |
+| Products | DELETE | `/products/:id` | yes | ADMIN | — | 200 | 401, 403, 404, 409 PRODUCT_ACTIVE_CANNOT_DELETE | Rejected while the product is active (deactivate first); deactivated rows confirm idempotently |
 | Products | POST | `/products/:productId/variants` | yes | ADMIN | variant JSON | 201 | 401, 403, 404, 409 SKU/BARCODE, 422 | — |
 | Products | PATCH | `/products/:productId/variants/:variantId` | yes | ADMIN | partial variant | 200 | 401, 403, 404, 422 PRODUCT_VARIANT_UPDATE_INVALID | Product-scoped |
 | Products | DELETE | `/products/:productId/variants/:variantId` | yes | ADMIN | — | 200 | 401, 403, 404 | Deactivates |
@@ -85,9 +86,10 @@ endpoints, fields, status codes, or rules.
 | Orders | POST | `/orders` | yes | — | shippingAddressId UUID, billingAddressId?, couponCode? | 201 | 401, 404 ORDER_ADDRESS_NOT_FOUND/COUPON_NOT_FOUND, 409 ORDER_INSUFFICIENT_STOCK/COUPON_USAGE_LIMIT_EXCEEDED, 422 ORDER_EMPTY_CART/ORDER_VARIANT_INACTIVE/coupon validity codes | Atomic checkout; optional coupon validated server-side, discount in totals, usage consumed in-tx |
 | Orders | GET | `/orders` | yes | — | — | 200 | 401 | Own orders, newest first |
 | Orders | GET | `/orders/:id` | yes | — | UUID param | 200 | 401, 404 ORDER_NOT_FOUND | Owner-scoped, snapshots |
-| Orders (admin) | GET | `/orders/admin` | yes | ADMIN | `?page,limit,status,paymentStatus,search,from,to,sortBy,sortOrder` | 200 | 401, 403, 422 | All orders, newest first; `meta` pagination |
+| Orders | POST | `/orders/:id/cancel` | yes | — | UUID param, no body | 200 | 401, 404 ORDER_NOT_FOUND, 409 ORDER_INVALID_STATUS_TRANSITION/ORDER_STATUS_UNCHANGED/ORDER_CONCURRENT_UPDATE, 422 | Customer self-cancellation (PENDING/CONFIRMED/PROCESSING only); same atomic transaction as admin cancel (incl. payment cancellation) |
+| Orders (admin) | GET | `/orders/admin` | yes | ADMIN | `?page,limit,status,paymentStatus,search,from,to,sortBy,sortOrder` | 200 | 401, 403, 422 | All orders, newest first; `meta` pagination; `search` covers order number, item SKU, item product name, customer email/name |
 | Orders (admin) | GET | `/orders/admin/:id` | yes | ADMIN | UUID param | 200 | 401, 403, 404 ORDER_NOT_FOUND | Any order + customer brief |
-| Orders (admin) | PATCH | `/orders/admin/:id/status` | yes | ADMIN | `{ status, note? }` full-lifecycle transition | 200 | 401, 403, 404, 409 ORDER_INVALID_STATUS_TRANSITION/ORDER_STATUS_UNCHANGED/ORDER_CONCURRENT_UPDATE, 422 | CANCELLED restores inventory; appends history + customer notification atomically |
+| Orders (admin) | PATCH | `/orders/admin/:id/status` | yes | ADMIN | `{ status, note? }` full-lifecycle transition | 200 | 401, 403, 404, 409 ORDER_INVALID_STATUS_TRANSITION/ORDER_STATUS_UNCHANGED/ORDER_CONCURRENT_UPDATE, 422 | CANCELLED restores inventory, moves payments to CANCELLED, appends history + customer notification atomically |
 | Orders (admin) | PATCH | `/orders/admin/:id/payment` | yes | ADMIN | `{ status }` payment transition | 200 | 401, 403, 404, 409 PAYMENT_INVALID_STATUS_TRANSITION/ORDER_PAYMENT_MISSING, 422 | Status only; no gateway |
 | Notifications | GET | `/notifications` | yes | — | `?limit` (1–50, default 20), `?unreadOnly=true\|false` | 200 | 401, 422 | Own notifications newest-first + `meta.unreadCount`; order rows carry `orderNumber` |
 | Notifications | GET | `/notifications/unread-count` | yes | — | — | 200 | 401 | Authoritative `{ unreadCount }` for badges |
@@ -105,14 +107,13 @@ endpoints, fields, status codes, or rules.
 | Announcements (admin) | GET | `/announcements/admin/:id` | yes | ADMIN | UUID param | 200 | 401, 403, 404 ANNOUNCEMENT_NOT_FOUND | — |
 | Announcements (admin) | PATCH | `/announcements/admin/:id` | yes | ADMIN | partial subset | 200 | 401, 403, 404, 422 | Non-empty body; date-range guarded |
 | Announcements (admin) | DELETE | `/announcements/admin/:id` | yes | ADMIN | UUID param | 200 | 401, 403, 404 ANNOUNCEMENT_NOT_FOUND | Deletable |
-| Reviews | POST | `/reviews` | yes | — | orderItemId UUID, rating 1–5 int, title?, comment? | 201 | 401, 404 REVIEW_ORDER_ITEM_NOT_FOUND, 409 REVIEW_ALREADY_EXISTS, 422 | productId derived server-side |
+| Reviews | POST | `/reviews` | yes | — | orderItemId UUID, rating 1–5 int, title?, comment? | 201 | 401, 404 REVIEW_ORDER_ITEM_NOT_FOUND, 409 REVIEW_ALREADY_EXISTS, 422 | productId derived server-side; created visible immediately (no approval step) |
 | Reviews | GET | `/reviews/me` | yes | — | — | 200 | 401 | Own reviews, newest first |
 | Reviews | GET | `/reviews/:id` | yes | — | UUID param | 200 | 401, 404 REVIEW_NOT_FOUND | Owner-scoped |
 | Reviews | PATCH | `/reviews/:id` | yes | — | rating?/title?/comment? | 200 | 401, 404, 422 REVIEW_UPDATE_INVALID | Owner-scoped |
 | Reviews | DELETE | `/reviews/:id` | yes | — | UUID param | 200 | 401, 404 | Hard delete |
-| Reviews (admin) | GET | `/reviews/admin` | yes | ADMIN | `?page,limit,isApproved,rating,productId,userId,search,sortBy,sortOrder` | 200 | 401, 403, 422 | All reviews + customer brief, newest first; `meta` pagination |
-| Reviews (admin) | PATCH | `/reviews/admin/:id` | yes | ADMIN | `{ isApproved }` boolean | 200 | 401, 403, 404 REVIEW_NOT_FOUND, 422 | Approve (`true`)/reject (`false`); rejected stay listed |
-| Reviews (admin) | DELETE | `/reviews/admin/:id` | yes | ADMIN | UUID param | 200 | 401, 403, 404 REVIEW_NOT_FOUND | Hard delete; order records untouched |
+| Reviews | GET | `/reviews/product/:productId` | no | — | productId UUID param | 200 | 404, 422 | Public product reviews, newest first; no approval gate, no private data |
+| Reviews (admin) | GET | `/reviews/admin` | yes | ADMIN | `?page,limit,isApproved,rating,productId,userId,search,sortBy,sortOrder` | 200 | 401, 403, 422 | Read-only: all reviews + customer brief, newest first; `meta` pagination (no admin mutation endpoints exist) |
 | Coupons (admin) | GET | `/coupons` | yes | ADMIN | `?status=active\|inactive\|all` (default all), `?search=`, `?page=`, `?limit=` | 200 | 401, 403, 422 | All coupons, newest first; `meta` pagination |
 | Coupons (admin) | GET | `/coupons/:id` | yes | ADMIN | UUID param | 200 | 401, 403, 404 COUPON_NOT_FOUND | Full definition + usage |
 | Coupons (admin) | POST | `/coupons` | yes | ADMIN | code*, discountType*, discountValue*, optional definition fields | 201 | 401, 403, 404 PRODUCT_NOT_FOUND, 409 COUPON_CODE_EXISTS, 422 | Code stored uppercased |
@@ -243,13 +244,15 @@ unknown variants return `PRODUCT_VARIANT_NOT_FOUND`.
   (`{ id, name, sku, price, isActive }`) so clients can show the default
   purchasable variant without changing product-level persistence.
 - Orders: `data.order(s)` with `orderNumber` (`ORD-YYYY-NNNNNN`), `status`,
-  string money totals, `items[]` snapshots (`productName`, `variantName`,
-  `sku`, `unitPrice`, `discount`, `quantity`, `lineTotal`,
-  `imageStoragePath` — immutable variant-image snapshot taken at order
-  time, `null` for pre-snapshot orders or imageless products),
-  `addresses[]` (`SHIPPING` plus optional `BILLING` snapshots),
-  `payments[]` (`CASH_ON_DELIVERY`, `PENDING`, amount = grand total,
-  `INR`).
+  string money totals, `coupon` brief (`{ id, code, description,
+  discountType, discountValue }`, `null` when no coupon was used — the
+  effective amount stays snapshotted in `discountTotal`), `items[]`
+  snapshots (`productName`, `variantName`, `sku`, `unitPrice`, `discount`,
+  `quantity`, `lineTotal`, `imageStoragePath` — immutable variant-image
+  snapshot taken at order time, `null` for pre-snapshot orders or
+  imageless products), `addresses[]` (`SHIPPING` plus optional `BILLING`
+  snapshots), `payments[]` (`CASH_ON_DELIVERY`, `PENDING`, amount = grand
+  total, `INR`).
 - Orders (admin): same shape plus `userId` and a `customer` brief
   (`id`, `email`, `firstName`, `lastName`, `phone` — never password
   hashes or tokens). Admin list returns `data.orders[]` with `meta`
@@ -287,7 +290,10 @@ unknown variants return `PRODUCT_VARIANT_NOT_FOUND`.
   safe fields only, never admin metadata.
 - Admin payment machine (COD/manual, status only): `PENDING →
   PAID|FAILED`, `FAILED → PAID`, `PAID → REFUNDED`, `REFUNDED`
-  terminal. `REFUNDED` records a manual refund; no gateway exists.
+  terminal. `CANCELLED` is terminal and written only by the atomic
+  order-cancellation transaction (order → CANCELLED moves its payments
+  to CANCELLED in the same transaction). `REFUNDED` records a manual
+  refund; no gateway exists.
 - Reviews: `data.review(s)` with `productId`, `orderItemId`, `rating`,
   `title`, `comment`, `isApproved`, and a product brief. No user or order
   data embedded.

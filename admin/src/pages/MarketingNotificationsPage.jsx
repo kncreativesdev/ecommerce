@@ -325,7 +325,7 @@ export function MarketingNotificationsPage() {
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {notification.linkType ? (
-                        <span className="font-mono text-xs">
+                        <span className="block max-w-56 break-all font-mono text-xs">
                           {notification.linkType}
                           {notification.linkValue ? `:${notification.linkValue}` : ''}
                         </span>

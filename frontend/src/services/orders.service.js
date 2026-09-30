@@ -12,7 +12,16 @@ import { apiGet, apiPost } from '../lib/apiClient.js';
  * - `GET /orders` → bare array of own orders, newest first. (Controller
  *   returns `data` as the array; handled defensively.)
  * - `GET /orders/:id` → `{ order }`. Other users' ids → `404`.
- * No cancellation or mutation endpoints exist — no such UI.
+ * - `POST /orders/:id/cancel` → customer self-cancellation of an eligible
+ *   order → `200 { order }`. Only PENDING/CONFIRMED/PROCESSING orders can
+ *   be cancelled (backend `ORDER_STATUS_TRANSITIONS`); anything else →
+ *   `409 ORDER_INVALID_STATUS_TRANSITION`. Other users' ids → `404`.
+ * - `POST /orders/:id/returns { reason, details? }` → customer return
+ *   request for a delivered/completed order → `201 { returnRequest }`.
+ *   Ineligible orders → `422 ORDER_RETURN_NOT_ELIGIBLE`; a second request
+ *   for the same order → `409 RETURN_ALREADY_REQUESTED`.
+ * - `GET /orders/:id/returns` → `{ returnRequest }` (null when none).
+ *   Other users' ids → `404`. The order timeline is never affected.
  */
 export function createOrder({ shippingAddressId, billingAddressId, couponCode }) {
   const body = { shippingAddressId };
@@ -31,4 +40,18 @@ export function fetchOrders() {
 
 export function fetchOrderById(id) {
   return apiGet(`/orders/${id}`).then((data) => data?.order ?? null);
+}
+
+export function cancelOrder(id) {
+  return apiPost(`/orders/${id}/cancel`).then((data) => data?.order ?? null);
+}
+
+export function requestReturn(orderId, { reason, details }) {
+  const body = { reason };
+  if (details?.trim()) body.details = details.trim();
+  return apiPost(`/orders/${orderId}/returns`, body).then((data) => data?.returnRequest ?? null);
+}
+
+export function fetchReturnRequest(orderId) {
+  return apiGet(`/orders/${orderId}/returns`).then((data) => data?.returnRequest ?? null);
 }

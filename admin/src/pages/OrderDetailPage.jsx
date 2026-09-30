@@ -116,7 +116,7 @@ export function OrderDetailPage() {
       syncOrder(record);
       setStatusNote('');
       if (next === 'CANCELLED') {
-        toast.success(`Order ${detail.orderNumber} cancelled — stock restored.`);
+        toast.success(`Order ${detail.orderNumber} cancelled — stock restored, payment cancelled.`);
       } else {
         toast.success(`Order ${detail.orderNumber} moved to ${orderStatusLabel(next)}.`);
       }
@@ -257,7 +257,7 @@ export function OrderDetailPage() {
               )}
               {orderTransitions.includes('CANCELLED') ? (
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  Cancelling restores the ordered quantities to inventory; the payment record is left untouched.
+                  Cancelling restores the ordered quantities to inventory and moves the payment to cancelled.
                 </p>
               ) : null}
             </Section>
@@ -265,7 +265,7 @@ export function OrderDetailPage() {
             <Section title="Payment">
               {payment ? (
                 <>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <dl className="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-2">
                     <dt className="text-muted-foreground">Method</dt>
                     <dd className="font-medium text-foreground">{payment.method === 'CASH_ON_DELIVERY' ? 'Cash on delivery' : payment.method}</dd>
                     <dt className="text-muted-foreground">Status</dt>
@@ -349,10 +349,10 @@ export function OrderDetailPage() {
                 </tr>
               ))}
             </Table>
-            <dl className="ml-auto mt-4 grid max-w-xs grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+            <dl className="ml-auto mt-4 grid w-full max-w-full grid-cols-2 gap-x-4 gap-y-1.5 text-sm sm:max-w-xs">
               <dt className="text-muted-foreground">Subtotal</dt>
               <dd className="text-right tabular-nums text-foreground">{formatINR(detail.subtotal)}</dd>
-              <dt className="text-muted-foreground">Discount</dt>
+              <dt className="text-muted-foreground">Discount{detail.coupon?.code ? ` (${detail.coupon.code})` : ''}</dt>
               <dd className="text-right tabular-nums text-foreground">{formatINR(detail.discountTotal)}</dd>
               <dt className="text-muted-foreground">Shipping</dt>
               <dd className="text-right tabular-nums text-foreground">{formatINR(detail.shippingTotal)}</dd>
@@ -361,6 +361,21 @@ export function OrderDetailPage() {
               <dt className="font-semibold text-foreground">Grand total</dt>
               <dd className="text-right font-semibold tabular-nums text-foreground">{formatINR(detail.grandTotal)}</dd>
             </dl>
+            {detail.coupon?.code ? (
+              <div role="group" aria-label="Coupon applied" className="ml-auto mt-3 w-full max-w-full rounded-xl bg-surface-muted/60 px-4 py-3 text-sm sm:max-w-xs">
+                <p className="text-foreground">
+                  Coupon: <span className="font-mono font-bold">{detail.coupon.code}</span>
+                  <span className="text-muted-foreground">
+                    {' '}· {detail.coupon.discountType === 'PERCENTAGE'
+                      ? `${parseFloat(detail.coupon.discountValue) || 0}% off`
+                      : `${formatINR(detail.coupon.discountValue)} off`}
+                  </span>
+                </p>
+                {detail.coupon.description ? (
+                  <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{detail.coupon.description}</p>
+                ) : null}
+              </div>
+            ) : null}
             <p className="mt-2 text-xs text-muted-foreground">Totals are server-calculated and shown as stored.</p>
           </Section>
 
