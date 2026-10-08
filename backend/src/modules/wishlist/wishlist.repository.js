@@ -6,6 +6,9 @@ const PRODUCT_BRIEF_SELECT = {
   slug: true,
   brand: true,
   isActive: true,
+  // Tenant ownership for the Phase 2C-5 wishlist add check. Selected,
+  // never serialized (toSafeWishlist picks explicit fields).
+  companyId: true,
   // Default-variant display data (wishlist stays product-level by design —
   // no variant is persisted; the frontend shows the first purchasable
   // variant and its image from this brief when the catalog row is absent).

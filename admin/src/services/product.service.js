@@ -4,12 +4,15 @@ import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/apiClient.js';
  * Admin product API access — DOCUMENTED endpoints only (verified:
  * `products.routes|controller|service|validation`, API_CONTRACT_MATRIX):
  *
- * - `GET /products` (public default) → bare array, active only.
- *   `?status=active|inactive|all` selects the scope; `inactive`/`all`
- *   require ADMIN (else 401/403), invalid values → `422`. Reactivation is
- *   `PATCH { isActive: true }` — there is no dedicated restore endpoint.
- * - `GET /products/:id` → `{ product }`; `?status=all` (ADMIN) reads
+ * - `GET /products/admin` (ADMIN/HEAD/MEMBER, identity company) → bare
+ *   array, active only. `?status=active|inactive|all` selects the scope;
+ *   `inactive`/`all` require ADMIN (else 401/403), invalid values → `422`.
+ *   Company-scoped operational reads — never the public Host-based
+ *   `GET /products` (that serves the storefront company).
+ * - `GET /products/admin/:id` → `{ product }`; `?status=all` (ADMIN) reads
  *   inactive rows with all variants; otherwise `404 PRODUCT_NOT_FOUND`.
+ *   Reactivation is `PATCH { isActive: true }` — there is no dedicated
+ *   restore endpoint.
  * - `POST /products` (ADMIN) → `201 { product }`. Writable:
  *   `name*` (1–255), `slug?` (≤280, auto-derived), `description?`,
  *   `shortDescription?`, `brand?` (≤100), `categoryId*` (must reference an
@@ -29,12 +32,12 @@ import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/apiClient.js';
  */
 export function fetchProducts(status = 'active') {
   const query = status && status !== 'active' ? `?status=${encodeURIComponent(status)}` : '';
-  return apiGet(`/products${query}`);
+  return apiGet(`/products/admin${query}`);
 }
 
 export function fetchProductById(id, scope = 'active') {
   const query = scope && scope !== 'active' ? `?status=${encodeURIComponent(scope)}` : '';
-  return apiGet(`/products/${id}${query}`).then((data) => data?.product ?? null);
+  return apiGet(`/products/admin/${id}${query}`).then((data) => data?.product ?? null);
 }
 
 export function createProduct(payload) {

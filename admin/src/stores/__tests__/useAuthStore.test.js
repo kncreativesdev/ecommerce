@@ -1,177 +1,99 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiGet, setAuthHandler, setTokenSink } from '../../lib/apiClient.js';
-import { loginRequest } from '../../services/auth.service.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthStore } from '../useAuthStore.js';
+import { fetchCurrentUser, loginRequest, logoutRequest } from '../../services/auth.service.js';
 
-function jsonResponse(payload, { ok = true, status = 200 } = {}) {
-  return { ok, status, json: async () => payload };
-}
+vi.mock('../../services/auth.service.js', () => ({
+  fetchCurrentUser: vi.fn(),
+  loginRequest: vi.fn(),
+  logoutRequest: vi.fn(),
+}));
 
-const ADMIN_USER = { id: 'admin-1', email: 'admin@example.com', roles: ['ADMIN'] };
-
-function routeFetch({ refresh = 'ok', meUser = ADMIN_USER } = {}) {
-  const calls = { refresh: 0, logout: 0, login: 0 };
-  const mock = vi.fn(async (url, init = {}) => {
-    if (url.endsWith('/auth/refresh')) {
-      calls.refresh += 1;
-      if (refresh === 'ok') return jsonResponse({ success: true, data: { accessToken: 'fresh-admin-token' } });
-      if (refresh === 'invalid') {
-        return jsonResponse(
-          { success: false, error: { code: 'AUTH_REFRESH_TOKEN_INVALID', message: 'Refresh token is missing or invalid' } },
-          { ok: false, status: 401 },
-        );
-      }
-      return jsonResponse(
-        { success: false, error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests, please try again later.' } },
-        { ok: false, status: 429 },
-      );
-    }
-    if (url.endsWith('/auth/logout')) {
-      calls.logout += 1;
-      return jsonResponse({ success: true, data: { message: 'Logged out successfully' } });
-    }
-    if (url.endsWith('/auth/login')) {
-      calls.login += 1;
-      return jsonResponse(
-        { success: false, error: { code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid email or password' } },
-        { ok: false, status: 401 },
-      );
-    }
-    if (url.endsWith('/auth/me')) {
-      if (!init.headers?.Authorization) {
-        return jsonResponse(
-          { success: false, error: { code: 'AUTH_UNAUTHORIZED', message: 'Authentication required' } },
-          { ok: false, status: 401 },
-        );
-      }
-      return jsonResponse({ success: true, data: { user: meUser } });
-    }
-    if (init.headers?.Authorization) return jsonResponse({ success: true, data: { orders: [] } });
-    return jsonResponse(
-      { success: false, error: { code: 'AUTH_TOKEN_EXPIRED', message: 'Access token has expired' } },
-      { ok: false, status: 401 },
-    );
-  });
-  return { mock, calls };
-}
-
-function resetAuth() {
+function resetStore() {
   useAuthStore.setState({ accessToken: null, user: null, status: 'idle', error: null });
 }
 
-function wireSpies() {
-  const onUnauthorized = vi.fn();
-  setAuthHandler({
-    getAccessToken: () => useAuthStore.getState().accessToken,
-    onUnauthorized,
-  });
-  setTokenSink((accessToken) => {
-    if (accessToken) useAuthStore.setState({ accessToken });
-  });
-  return { onUnauthorized };
-}
-
 beforeEach(() => {
-  vi.unstubAllGlobals();
-  resetAuth();
+  vi.clearAllMocks();
+  resetStore();
 });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  setAuthHandler({
-    getAccessToken: () => useAuthStore.getState().accessToken,
-    onUnauthorized: () => useAuthStore.getState().handleUnauthorized(),
-  });
-  setTokenSink((accessToken) => {
-    if (accessToken) useAuthStore.setState({ accessToken });
-  });
-  resetAuth();
-});
+/**
+ * Phase 2C-22R: the common panel login admits exactly
+ * SUPER_ADMIN/ADMIN/HEAD/MEMBER. Invalid credentials, inactive
+ * accounts, and rate limits behave exactly as before (backend codes
+ * surface unchanged); only the role gate moved from ADMIN-only to
+ * panel-wide.
+ */
+describe('useAuthStore login role gate', () => {
+  it.each([['SUPER_ADMIN'], ['ADMIN'], ['HEAD'], ['MEMBER']])('signs in %s and keeps the session', async (role) => {
+    const user = { id: 'u1', email: 'staff@example.test', roles: [role] };
+    loginRequest.mockResolvedValue({ user, accessToken: 'token' });
 
-describe('admin auth bootstrap (hard-refresh equivalent)', () => {
-  it('bootstrap + concurrent 401s share exactly one refresh; session restored', async () => {
-    const { mock, calls } = routeFetch();
-    vi.stubGlobal('fetch', mock);
-    const { onUnauthorized } = wireSpies();
+    const result = await useAuthStore.getState().login({ email: 'staff@example.test', password: 'Pass123!' });
 
-    const bootstrapping = useAuthStore.getState().bootstrap();
-    const readers = Array.from({ length: 5 }, () => apiGet('/orders/admin?page=1'));
-    const [ , ...pages ] = await Promise.all([bootstrapping, ...readers]);
-
-    expect(calls.refresh).toBe(1);
-    expect(onUnauthorized).not.toHaveBeenCalled();
-    for (const page of pages) expect(page).toEqual({ orders: [] });
-    const state = useAuthStore.getState();
-    expect(state.status).toBe('ready');
-    expect(state.accessToken).toBe('fresh-admin-token');
-    expect(state.user).toEqual(ADMIN_USER);
+    expect(result).toEqual({ ok: true });
+    expect(useAuthStore.getState()).toMatchObject({ user, accessToken: 'token', status: 'ready', error: null });
+    expect(logoutRequest).not.toHaveBeenCalled();
   });
 
-  it('bootstrap runs once per page load — repeat calls emit no further refresh', async () => {
-    const { mock, calls } = routeFetch();
-    vi.stubGlobal('fetch', mock);
-    wireSpies();
-
-    await useAuthStore.getState().bootstrap();
-    await useAuthStore.getState().bootstrap();
-    await useAuthStore.getState().bootstrap();
-
-    expect(calls.refresh).toBe(1);
-  });
-
-  it('throttled refresh settles error — no logout, no cookie destroy', async () => {
-    const { mock, calls } = routeFetch({ refresh: 'throttled' });
-    vi.stubGlobal('fetch', mock);
-    const { onUnauthorized } = wireSpies();
-
-    await useAuthStore.getState().bootstrap();
-
-    const state = useAuthStore.getState();
-    expect(state.status).toBe('error');
-    expect(state.error).toMatchObject({ status: 429 });
-    expect(onUnauthorized).not.toHaveBeenCalled();
-    expect(calls.logout).toBe(0);
-  });
-
-  it('definitively invalid refresh settles logged-out without server logout', async () => {
-    const { mock, calls } = routeFetch({ refresh: 'invalid' });
-    vi.stubGlobal('fetch', mock);
-    wireSpies();
-
-    await useAuthStore.getState().bootstrap();
-
-    const state = useAuthStore.getState();
-    expect(state.status).toBe('logged-out');
-    expect(state.accessToken).toBeNull();
-    expect(calls.logout).toBe(0);
-  });
-
-  it('non-admin identity signs out locally only — shared customer cookie survives', async () => {
-    const { mock, calls } = routeFetch({ meUser: { id: 'u1', roles: ['CUSTOMER'] } });
-    vi.stubGlobal('fetch', mock);
-    wireSpies();
-
-    await useAuthStore.getState().bootstrap();
-
-    const state = useAuthStore.getState();
-    expect(state.status).toBe('logged-out');
-    expect(state.user).toBeNull();
-    expect(calls.logout).toBe(0);
-  });
-
-  it('bad-credential login never triggers a refresh nor clears the session', async () => {
-    const { mock, calls } = routeFetch();
-    vi.stubGlobal('fetch', mock);
-    const { onUnauthorized } = wireSpies();
-    useAuthStore.setState({ accessToken: 'live-token', user: ADMIN_USER, status: 'ready' });
-
-    await expect(loginRequest({ email: 'a@example.com', password: 'wrong' })).rejects.toMatchObject({
-      status: 401,
-      code: 'AUTH_INVALID_CREDENTIALS',
+  it('signs CUSTOMER straight back out with the stable NOT_ADMIN error', async () => {
+    loginRequest.mockResolvedValue({
+      user: { id: 'c1', email: 'c@example.test', roles: ['CUSTOMER'] },
+      accessToken: 'token',
     });
 
-    expect(calls.refresh).toBe(0);
-    expect(onUnauthorized).not.toHaveBeenCalled();
-    expect(useAuthStore.getState().accessToken).toBe('live-token');
+    const result = await useAuthStore.getState().login({ email: 'c@example.test', password: 'Pass123!' });
+
+    expect(result).toEqual({ ok: false });
+    expect(logoutRequest).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: null,
+      user: null,
+      status: 'logged-out',
+      error: { message: 'This account does not have admin access.', code: 'NOT_ADMIN' },
+    });
+  });
+
+  it('signs unknown and roleless identities straight back out', async () => {
+    for (const user of [{ id: 'u1', roles: ['OWNER'] }, { id: 'u1', roles: [] }, { id: 'u1' }]) {
+      loginRequest.mockResolvedValue({ user, accessToken: 'token' });
+      const result = await useAuthStore.getState().login({ email: 'x@example.test', password: 'Pass123!' });
+      expect(result).toEqual({ ok: false });
+      expect(useAuthStore.getState().status).toBe('logged-out');
+    }
+  });
+
+  it('preserves invalid-credential and inactive behavior byte-for-byte', async () => {
+    loginRequest.mockRejectedValueOnce({ message: 'Invalid email or password', code: 'AUTH_INVALID_CREDENTIALS' });
+    await expect(
+      useAuthStore.getState().login({ email: 'x@example.test', password: 'wrong' }),
+    ).resolves.toEqual({ ok: false });
+    expect(useAuthStore.getState()).toMatchObject({ status: 'logged-out', error: { code: 'AUTH_INVALID_CREDENTIALS' } });
+
+    loginRequest.mockRejectedValueOnce({ message: 'Inactive', code: 'AUTH_ACCOUNT_INACTIVE' });
+    await expect(
+      useAuthStore.getState().login({ email: 'x@example.test', password: 'Pass123!' }),
+    ).resolves.toEqual({ ok: false });
+    expect(useAuthStore.getState().error).toMatchObject({ code: 'AUTH_ACCOUNT_INACTIVE' });
+  });
+});
+
+describe('useAuthStore bootstrap role gate', () => {
+  it.each([['SUPER_ADMIN'], ['HEAD'], ['MEMBER']])('keeps %s signed in on bootstrap', async (role) => {
+    const user = { id: 'u1', email: 'staff@example.test', roles: [role] };
+    fetchCurrentUser.mockResolvedValue(user);
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useAuthStore.getState()).toMatchObject({ user, status: 'ready' });
+  });
+
+  it('signs CUSTOMER out locally on bootstrap without touching their cookie session', async () => {
+    fetchCurrentUser.mockResolvedValue({ id: 'c1', roles: ['CUSTOMER'] });
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(useAuthStore.getState()).toMatchObject({ user: null, status: 'logged-out' });
+    expect(logoutRequest).not.toHaveBeenCalled();
   });
 });

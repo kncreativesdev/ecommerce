@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute } from '../ProtectedRoute.jsx';
 import { useAuthStore } from '../../stores/useAuthStore.js';
+import { ApiError } from '../../lib/apiClient.js';
 import { fetchNotifications, fetchUnreadCount } from '../../services/notifications.service.js';
 
 vi.mock('../../services/notifications.service.js', () => ({
@@ -82,6 +83,46 @@ describe('ProtectedRoute bootstrap states', () => {
 
     expect(await screen.findByText('Couldn’t restore your session')).toBeInTheDocument();
     expect(screen.queryByText('Login page')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /try again|retry/i }));
+    expect(await screen.findByText('Orders page')).toBeInTheDocument();
+    expect(useAuthStore.getState().status).toBe('ready');
+  });
+
+  it('shows the dedicated suspended state — never protected content, never a login redirect', async () => {
+    useAuthStore.setState({
+      accessToken: null,
+      user: null,
+      status: 'error',
+      lastError: new ApiError({ status: 403, code: 'COMPANY_SUSPENDED', message: 'Company operations are unavailable while the company is suspended' }),
+    });
+    renderGuard();
+
+    expect(await screen.findByText('Storefront unavailable')).toBeInTheDocument();
+    expect(screen.getByText(/currently suspended/i)).toBeInTheDocument();
+    expect(screen.queryByText('Orders page')).not.toBeInTheDocument();
+    expect(screen.queryByText('Login page')).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn’t restore your session/i)).not.toBeInTheDocument();
+  });
+
+  it('retries bootstrap from the suspended state and renders the route after restore', async () => {
+    useAuthStore.setState({
+      accessToken: null,
+      user: null,
+      status: 'error',
+      lastError: new ApiError({ status: 403, code: 'COMPANY_SUSPENDED', message: 'Company operations are unavailable while the company is suspended' }),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url) => {
+        if (url.endsWith('/auth/refresh')) return jsonResponse({ success: true, data: { accessToken: 'fresh' } });
+        if (url.endsWith('/auth/me')) return jsonResponse({ success: true, data: { user: { id: 'u1' } } });
+        return jsonResponse({ success: true, data: [] });
+      }),
+    );
+    renderGuard();
+
+    expect(await screen.findByText('Storefront unavailable')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /try again|retry/i }));
     expect(await screen.findByText('Orders page')).toBeInTheDocument();

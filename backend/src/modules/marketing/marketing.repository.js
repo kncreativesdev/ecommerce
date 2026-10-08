@@ -14,16 +14,21 @@ const MARKETING_SELECT = {
   updatedAt: true,
 };
 
-async function findAllMarketingAdmin() {
+/**
+ * Phase 2C-7 company scoping: ADMIN management reads carry the
+ * server-resolved companyId. Cross-company ids read as missing.
+ */
+async function findAllMarketingAdmin(companyId) {
   return prisma.marketingNotification.findMany({
+    where: { companyId },
     orderBy: { createdAt: "desc" },
     select: MARKETING_SELECT,
   });
 }
 
-async function findMarketingByIdAdmin(id) {
-  return prisma.marketingNotification.findUnique({
-    where: { id },
+async function findMarketingByIdAdmin(id, companyId) {
+  return prisma.marketingNotification.findFirst({
+    where: { id, companyId },
     select: MARKETING_SELECT,
   });
 }
@@ -40,6 +45,7 @@ async function createMarketing(data) {
       linkType: data.linkType ?? null,
       linkValue: data.linkValue ?? null,
       createdBy: data.createdBy ?? null,
+      companyId: data.companyId ?? null,
     },
     select: MARKETING_SELECT,
   });
@@ -76,10 +82,11 @@ async function deleteMarketing(id) {
  * Currently visible broadcasts: active AND within the optional
  * [startsAt, expiresAt] window. Newest first.
  */
-async function findActiveMarketing(now) {
+async function findActiveMarketing(companyId, now) {
   return prisma.marketingNotification.findMany({
     where: {
       isActive: true,
+      companyId,
       AND: [
         { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
         { OR: [{ expiresAt: null }, { expiresAt: { gte: now } }] },

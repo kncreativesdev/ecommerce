@@ -1,5 +1,6 @@
 const dashboardRepository = require("./dashboard.repository");
 const { priceToCents, centsToString } = require("../orders/orders.utils");
+const { AppError } = require("../../utils/appError");
 
 /**
  * Dashboard summary service.
@@ -109,16 +110,22 @@ function toMoneyString(value) {
   return centsToString(priceToCents(String(value ?? "0")));
 }
 
-async function getSummary(range = "today", now = new Date()) {
+async function getSummary(companyId, range = "today", now = new Date()) {
+  // Phase 2C-2: all aggregates — order-based and the inventory
+  // snapshot alike — are scoped to the admin's company (see the
+  // repository predicates).
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
   const { from, frameEnd, granularity } = rangeFrame(range, now);
 
   const [statusCounts, revenueTotal, period, completedInPeriod, rows, inventory] = await Promise.all([
-    dashboardRepository.getOrderStatusCounts(),
-    dashboardRepository.getRecognizedRevenueTotal(),
-    dashboardRepository.getPeriodAggregates(from, now),
-    dashboardRepository.getCompletedInPeriodCount(from, now),
-    dashboardRepository.getBuckets(granularity, from, frameEnd),
-    dashboardRepository.getInventorySnapshot(),
+    dashboardRepository.getOrderStatusCounts(companyId),
+    dashboardRepository.getRecognizedRevenueTotal(companyId),
+    dashboardRepository.getPeriodAggregates(companyId, from, now),
+    dashboardRepository.getCompletedInPeriodCount(companyId, from, now),
+    dashboardRepository.getBuckets(companyId, granularity, from, frameEnd),
+    dashboardRepository.getInventorySnapshot(companyId),
   ]);
 
   const byBucket = new Map(rows.map((row) => [row.bucketStart, row]));

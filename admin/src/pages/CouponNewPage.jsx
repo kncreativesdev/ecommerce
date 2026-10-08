@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCouponStore } from '../stores/useCouponStore.js';
+import { useAuthStore } from '../stores/useAuthStore.js';
 import { fetchProducts } from '../services/product.service.js';
 import { CouponForm } from '../components/catalog/CouponForm.jsx';
 
@@ -15,6 +16,9 @@ import { CouponForm } from '../components/catalog/CouponForm.jsx';
  */
 export function CouponNewPage() {
   const navigate = useNavigate();
+  // Product eligibility list follows the caller's read scope: ADMIN
+  // sees all rows, HEAD sees active rows (backend 403s other scopes).
+  const isAdmin = useAuthStore((state) => state.isAdmin());
   const createCoupon = useCouponStore((state) => state.createCoupon);
   const refreshCoupons = useCouponStore((state) => state.refreshCoupons);
   const [products, setProducts] = useState([]);
@@ -24,7 +28,7 @@ export function CouponNewPage() {
   useEffect(() => {
     document.title = 'New Coupon — Tech Pulse Admin';
     let cancelled = false;
-    fetchProducts('all')
+    fetchProducts(isAdmin ? 'all' : 'active')
       .then((rows) => {
         if (!cancelled) setProducts(Array.isArray(rows) ? rows : []);
       })
@@ -37,7 +41,7 @@ export function CouponNewPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAdmin]);
 
   const handleSubmit = async (payload) => {
     setSubmitting(true);

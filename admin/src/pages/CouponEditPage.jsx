@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronRight, History, ReceiptText } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCouponStore } from '../stores/useCouponStore.js';
+import { useAuthStore } from '../stores/useAuthStore.js';
 import { fetchCouponById } from '../services/coupon.service.js';
 import { fetchProducts } from '../services/product.service.js';
 import { CouponForm } from '../components/catalog/CouponForm.jsx';
@@ -24,6 +25,8 @@ import { couponUsageSummary } from '../utils/coupons.js';
 export function CouponEditPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  // Product eligibility list follows the caller's read scope (see CouponNewPage).
+  const isAdmin = useAuthStore((state) => state.isAdmin());
   const updateCoupon = useCouponStore((state) => state.updateCoupon);
   const [coupon, setCoupon] = useState(null);
   const [status, setStatus] = useState('loading');
@@ -81,7 +84,7 @@ export function CouponEditPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchProducts('all')
+    fetchProducts(isAdmin ? 'all' : 'active')
       .then((rows) => {
         if (!cancelled) setProducts(Array.isArray(rows) ? rows : []);
       })
@@ -94,7 +97,7 @@ export function CouponEditPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAdmin]);
 
   const reload = () => {
     setError(null);

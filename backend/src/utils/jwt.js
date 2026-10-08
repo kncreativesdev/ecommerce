@@ -34,4 +34,17 @@ function verifyRefreshToken(token) {
   return verifyWithSecret(token, env.jwtRefreshSecret);
 }
 
-module.exports = { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken };
+/**
+ * Reads the session metadata of a freshly minted refresh token without
+ * verifying (callers sign it themselves in the same flow). Returns
+ * null when the token carries no usable `jti`/`exp`.
+ */
+function refreshSessionMeta(token) {
+  const payload = jwt.decode(token);
+  if (!payload || typeof payload.jti !== "string" || typeof payload.exp !== "number") {
+    return null;
+  }
+  return { jti: payload.jti, expiresAt: new Date(payload.exp * 1000) };
+}
+
+module.exports = { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken, refreshSessionMeta };

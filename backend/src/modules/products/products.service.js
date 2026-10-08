@@ -3,6 +3,7 @@ const productsRepository = require("./products.repository");
 const { findCategoryById } = require("../categories/categories.repository");
 const { ORDER_IN_PROCESS_STATUSES } = require("../orders/orders.service");
 const { normalizeSlug, toSafeProduct, toSafeVariant } = require("./products.utils");
+const { resolveActorSnapshot, assertAuditInput, recordAuditEvent } = require("../audit/audit.service");
 
 const PRODUCT_UPDATABLE_FIELDS = [
   "name",
@@ -86,12 +87,99 @@ function mapVariantConflict(err) {
   throw err;
 }
 
-async function assertActiveCategory(categoryId) {
+/**
+ * Phase 2C-1 category gate: the category must exist, be active, AND
+ * belong to the creator's company. Cross-company categories fail with
+ * the same 404 as missing ones — no existence oracle.
+ */
+async function assertActiveCategory(categoryId, companyId) {
   const category = await findCategoryById(categoryId);
-  if (!category || !category.isActive) {
+  if (!category || !category.isActive || category.companyId !== companyId) {
     throw new AppError(404, "CATEGORY_NOT_FOUND", "Category not found");
   }
   return category;
+}
+
+function assertCreatorCompany(companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
+  return companyId;
+}
+
+/**
+ * Phase 3-2 RBAC: active-state writes need an explicit grant. ADMIN and
+ * HEAD hold product:DEACTIVATE; MEMBER holds CREATE/READ/UPDATE only,
+ * so a MEMBER caller may never submit `isActive: false` (neither on
+ * the product nor on nested creation variants) nor any explicit
+ * `isActive` on PATCH. The HTTP controller always supplies
+ * `actor.roles`; a missing roles array fails closed. Hard deletion
+ * (`DELETE /products/:id`) and variant endpoints stay ADMIN-only at
+ * the route layer and need no check here.
+ */
+function assertMayWriteProductActiveState(actor) {
+  const roles = actor && Array.isArray(actor.roles) ? actor.roles : [];
+  if (roles.includes("ADMIN") || roles.includes("HEAD")) {
+    return;
+  }
+  throw new AppError(403, "AUTH_FORBIDDEN", "Insufficient permissions to set isActive");
+}
+
+/**
+ * Phase 3-3 RBAC: same active-state rule for standalone variant
+ * endpoints. Variants carry no separate permission namespace in
+ * `permissions.js` — they are product-sub-resource operations
+ * covered by the product grants (P.3 denormalized membership,
+ * nested creation inside product CREATE, no standalone reads),
+ * consistent with the Phase 3-2 nested-variant allowance. ADMIN and
+ * HEAD hold product:DEACTIVATE; MEMBER holds CREATE/UPDATE only.
+ * Variant soft-deactivation (`DELETE …/variants/:variantId`) stays
+ * ADMIN/HEAD at the route layer and needs no check here.
+ */
+function assertMayWriteVariantActiveState(actor) {
+  const roles = actor && Array.isArray(actor.roles) ? actor.roles : [];
+  if (roles.includes("ADMIN") || roles.includes("HEAD")) {
+    return;
+  }
+  throw new AppError(403, "AUTH_FORBIDDEN", "Insufficient permissions to set isActive");
+}
+
+/**
+ * Phase 2C-17 mutation audit. Single-write catalog operations use the
+ * post-commit pattern (recorded only after success); the two
+ * multi-write transactions (creation, guarded deactivation) carry the
+ * validated payload inside via the repository audit parameter.
+ */
+async function snapshotActor(actor) {
+  return actor && actor.id ? resolveActorSnapshot(actor.id) : null;
+}
+
+function productEvent(snapshot, companyId, action, row) {
+  return assertAuditInput({
+    actorId: snapshot ? snapshot.id : null,
+    actorRole: snapshot ? snapshot.role : "SYSTEM",
+    actorEmail: snapshot ? snapshot.email : null,
+    companyId,
+    action,
+    resource: "PRODUCT",
+    resourceId: row.id,
+    outcome: "SUCCESS",
+    details: { name: row.name },
+  });
+}
+
+function variantEvent(snapshot, companyId, action, row) {
+  return assertAuditInput({
+    actorId: snapshot ? snapshot.id : null,
+    actorRole: snapshot ? snapshot.role : "SYSTEM",
+    actorEmail: snapshot ? snapshot.email : null,
+    companyId,
+    action,
+    resource: "PRODUCT_VARIANT",
+    resourceId: row.id,
+    outcome: "SUCCESS",
+    details: { sku: row.sku ?? null },
+  });
 }
 
 function buildVariantData(input) {
@@ -112,28 +200,60 @@ function buildVariantData(input) {
   };
 }
 
-async function listProducts(status = "active") {
-  const rows = await productsRepository.findProductsByStatus(status);
+/**
+ * Phase 2C-12 public storefront rule (mirrors categories): no resolved
+ * company → no catalog data, using the existing not-found code.
+ * Embedded variants/images/category briefs follow the gated root
+ * product, so no nested relation can cross companies.
+ */
+function assertPublicCompany(companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
+  }
+  return companyId;
+}
+
+async function listProducts(status = "active", companyId = null) {
+  assertPublicCompany(companyId);
+  const rows = await productsRepository.findProductsByStatus(status, companyId);
   return rows.map(toSafeProduct);
 }
 
-async function getProduct(id, scope = "active") {
+async function getProduct(id, scope = "active", companyId = null) {
+  assertPublicCompany(companyId);
   const row =
     scope === "all"
-      ? await productsRepository.findProductById(id)
-      : await productsRepository.findActiveProductById(id);
+      ? await productsRepository.findProductById(id, companyId)
+      : await productsRepository.findActiveProductById(id, companyId);
   if (!row) {
     throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
   }
   return toSafeProduct(row);
 }
 
-async function createProduct(input) {
-  await assertActiveCategory(input.categoryId);
+async function createProduct(companyId, input, actor = null) {
+  assertCreatorCompany(companyId);
+  await assertActiveCategory(input.categoryId, companyId);
+  // Phase 3-2: creating an inactive product (or inactive nested
+  // variant) is an active-state write, not part of plain CREATE.
+  const nestedInactive = Array.isArray(input.variants) && input.variants.some((variant) => variant && variant.isActive === false);
+  if (input.isActive === false || nestedInactive) {
+    assertMayWriteProductActiveState(actor);
+  }
   const slug = resolveSlug(input.slug, input.name);
 
-  const variantsData = (input.variants ?? []).map(buildVariantData);
+  // Variants inherit the product's (creator's) company atomically in the
+  // same transaction — the P.3 denormalized invariant at write time.
+  const variantsData = (input.variants ?? []).map((variant) => ({
+    ...buildVariantData(variant),
+    companyId,
+  }));
 
+  // The audit payload is validated here and written inside the creation
+  // transaction — a rolled-back create leaves no audit row behind. The
+  // repository stamps the created product id as the resource.
+  const snapshot = await snapshotActor(actor);
+  const audit = productEvent(snapshot, companyId, "CREATED", { id: null, name: input.name });
   try {
     const row = await productsRepository.createProductWithVariants(
       {
@@ -145,8 +265,10 @@ async function createProduct(input) {
         categoryId: input.categoryId,
         isActive: input.isActive ?? true,
         isFeatured: input.isFeatured ?? false,
+        companyId,
       },
-      variantsData
+      variantsData,
+      audit
     );
     return toSafeProduct(row);
   } catch (err) {
@@ -160,8 +282,9 @@ async function createProduct(input) {
   }
 }
 
-async function updateProduct(id, input) {
-  const existing = await productsRepository.findProductById(id);
+async function updateProduct(id, companyId, input, actor = null) {
+  assertCreatorCompany(companyId);
+  const existing = await productsRepository.findProductById(id, companyId);
   if (!existing) {
     throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
   }
@@ -173,6 +296,12 @@ async function updateProduct(id, input) {
     }
   }
 
+  // Phase 3-2: any explicit `isActive` on PATCH is an active-state
+  // write (flip or re-affirmation alike), reserved to ADMIN/HEAD.
+  if (data.isActive !== undefined) {
+    assertMayWriteProductActiveState(actor);
+  }
+
   if (Object.keys(data).length === 0) {
     throw new AppError(422, "PRODUCT_UPDATE_INVALID", "No updatable fields provided");
   }
@@ -182,7 +311,7 @@ async function updateProduct(id, input) {
   }
 
   if (data.categoryId !== undefined) {
-    await assertActiveCategory(data.categoryId);
+    await assertActiveCategory(data.categoryId, existing.companyId);
   }
 
   // Deactivation transition (active → inactive) goes through the guarded
@@ -193,19 +322,30 @@ async function updateProduct(id, input) {
     const rest = { ...data };
     delete rest.isActive;
     let row;
+    // The guarded deactivation carries the audit inside its transaction
+    // (no record when a raced deactivation made it a no-op).
+    const snapshot = await snapshotActor(actor);
+    let result;
     try {
-      row = await productsRepository.deactivateProductGuarded(id, ORDER_IN_PROCESS_STATUSES);
+      result = await productsRepository.deactivateProductGuarded(
+        id,
+        companyId,
+        ORDER_IN_PROCESS_STATUSES,
+        productEvent(snapshot, companyId, "DEACTIVATED", { id, name: existing.name })
+      );
     } catch (err) {
       if (err.code === "P2025") {
         throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
       }
       throw err;
     }
+    row = result.row;
     if (Object.keys(rest).length === 0) {
       return toSafeProduct(row);
     }
     try {
       const updated = await productsRepository.updateProduct(id, rest);
+      await recordAuditEvent(productEvent(snapshot, companyId, "UPDATED", updated));
       return toSafeProduct(updated);
     } catch (err) {
       if (err.code === "P2002") {
@@ -220,6 +360,15 @@ async function updateProduct(id, input) {
 
   try {
     const row = await productsRepository.updateProduct(id, data);
+    const flipped = data.isActive !== undefined && data.isActive !== existing.isActive;
+    await recordAuditEvent(
+      productEvent(
+        await snapshotActor(actor),
+        companyId,
+        flipped ? (data.isActive ? "REACTIVATED" : "DEACTIVATED") : "UPDATED",
+        row
+      )
+    );
     return toSafeProduct(row);
   } catch (err) {
     if (err.code === "P2002") {
@@ -240,8 +389,9 @@ async function updateProduct(id, input) {
  * (idempotent soft-deactivate confirmation). Historical order data is
  * never touched.
  */
-async function deactivateProduct(id) {
-  const existing = await productsRepository.findProductById(id);
+async function deactivateProduct(id, companyId, actor = null) {
+  assertCreatorCompany(companyId);
+  const existing = await productsRepository.findProductById(id, companyId);
   if (!existing) {
     throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
   }
@@ -253,25 +403,43 @@ async function deactivateProduct(id) {
     );
   }
   const row = await productsRepository.deactivateProduct(id);
+  await recordAuditEvent(productEvent(await snapshotActor(actor), companyId, "DELETED", row));
   return toSafeProduct(row);
 }
 
-async function createVariant(productId, input) {
-  const product = await productsRepository.findProductById(productId);
+async function createVariant(productId, companyId, input, actor = null) {
+  assertCreatorCompany(companyId);
+  // The creator may only extend their own company's products: a
+  // cross-company productId fails exactly like a missing one, and the
+  // variant then inherits that (verified same-company) product.
+  const product = await productsRepository.findProductById(productId, companyId);
   if (!product) {
     throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
   }
+  // Phase 3-3: creating an inactive variant is an active-state write,
+  // not part of plain CREATE. The default (omitted → active) is
+  // unaffected.
+  if (input.isActive === false) {
+    assertMayWriteVariantActiveState(actor);
+  }
 
   try {
-    const row = await productsRepository.createVariant(productId, buildVariantData(input));
+    // The variant inherits its parent product's company (never the
+    // request), keeping the denormalized invariant exact by construction.
+    const row = await productsRepository.createVariant(productId, {
+      ...buildVariantData(input),
+      companyId: product.companyId,
+    });
+    await recordAuditEvent(variantEvent(await snapshotActor(actor), companyId, "CREATED", row));
     return toSafeVariant(row);
   } catch (err) {
     mapVariantConflict(err);
   }
 }
 
-async function updateVariant(productId, variantId, input) {
-  const existing = await productsRepository.findVariantByIdAndProductId(variantId, productId);
+async function updateVariant(productId, variantId, companyId, input, actor = null) {
+  assertCreatorCompany(companyId);
+  const existing = await productsRepository.findVariantByIdAndProductId(variantId, productId, companyId);
   if (!existing) {
     throw new AppError(404, "PRODUCT_VARIANT_NOT_FOUND", "Product variant not found");
   }
@@ -281,6 +449,13 @@ async function updateVariant(productId, variantId, input) {
     if (input[field] !== undefined) {
       data[field] = input[field];
     }
+  }
+
+  // Phase 3-3: any explicit `isActive` on variant PATCH is an
+  // active-state write (flip or re-affirmation alike), reserved to
+  // ADMIN/HEAD.
+  if (data.isActive !== undefined) {
+    assertMayWriteVariantActiveState(actor);
   }
 
   if (Object.keys(data).length === 0) {
@@ -299,6 +474,15 @@ async function updateVariant(productId, variantId, input) {
 
   try {
     const row = await productsRepository.updateVariant(existing.id, data);
+    const flipped = data.isActive !== undefined && data.isActive !== existing.isActive;
+    await recordAuditEvent(
+      variantEvent(
+        await snapshotActor(actor),
+        companyId,
+        flipped ? (data.isActive ? "REACTIVATED" : "DEACTIVATED") : "UPDATED",
+        row
+      )
+    );
     return toSafeVariant(row);
   } catch (err) {
     if (err.code === "P2025") {
@@ -308,12 +492,14 @@ async function updateVariant(productId, variantId, input) {
   }
 }
 
-async function deactivateVariant(productId, variantId) {
-  const existing = await productsRepository.findVariantByIdAndProductId(variantId, productId);
+async function deactivateVariant(productId, variantId, companyId, actor = null) {
+  assertCreatorCompany(companyId);
+  const existing = await productsRepository.findVariantByIdAndProductId(variantId, productId, companyId);
   if (!existing) {
     throw new AppError(404, "PRODUCT_VARIANT_NOT_FOUND", "Product variant not found");
   }
   const row = await productsRepository.deactivateVariant(existing.id);
+  await recordAuditEvent(variantEvent(await snapshotActor(actor), companyId, "DEACTIVATED", row));
   return toSafeVariant(row);
 }
 

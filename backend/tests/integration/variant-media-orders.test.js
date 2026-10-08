@@ -5,6 +5,7 @@ import sharp from "sharp";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany, COMPANY_ONE_ID } from "../helpers/userFixtures.js";
 
 /**
  * Variant-media lifecycle + order image snapshots (live MySQL):
@@ -21,7 +22,15 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTVM${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
+
+// Phase 2C-26: public reads fail closed on unregistered hosts, so the
+// image-gallery assertions below resolve Company #1 through an
+// explicit RUN-unique test domain (removed in afterAll) instead of
+// ambient localhost state. Company #1 itself stays read-only.
+const PUBLIC_HOST = `${RUN.toLowerCase()}-public.example.test`;
+let publicDomainId = null;
 
 const ctx = {
   customerToken: null,
@@ -121,6 +130,7 @@ beforeAll(async () => {
   ).post("/api/v1/auth/register")
     .send({ email, password: "TestPass123!", firstName: "Variant", lastName: "Tester", phone: "9999999999" });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   ctx.customerToken = loggedIn.body.data.accessToken;
@@ -139,9 +149,17 @@ beforeAll(async () => {
     });
   expect(address.status).toBe(201);
   ctx.addressId = address.body.data.address.id;
+
+  const publicDomain = await prisma.companyDomain.create({
+    data: { companyId: COMPANY_ONE_ID, domain: PUBLIC_HOST, isPrimary: false, isActive: true },
+  });
+  publicDomainId = publicDomain.id;
 }, 90000);
 
 afterAll(async () => {
+  if (publicDomainId) {
+    await prisma.companyDomain.deleteMany({ where: { id: publicDomainId } });
+  }
   try {
     for (const imageId of [ctx.imageA1?.id, ctx.imageA2?.id, ctx.imageB1?.id, ctx.imageP1?.id]) {
       if (imageId) {
@@ -187,7 +205,7 @@ describe("variant media authorization and scoping", () => {
   });
 
   it("lists variant-scoped images publicly in deterministic order", async () => {
-    const res = await request(app).get(`/api/v1/products/${ctx.productId}/images`);
+    const res = await request(app).get(`/api/v1/products/${ctx.productId}/images`).set("Host", PUBLIC_HOST);
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(4);
     const forA = res.body.data.filter((image) => image.variantId === ctx.variantA.id);
@@ -287,7 +305,7 @@ describe("order image snapshots", () => {
 
     // Deactivation preserves media metadata (records stay listed under the
     // still-active product); only variant deletion nulls the link.
-    const gallery = await request(app).get(`/api/v1/products/${ctx.productId}/images`);
+    const gallery = await request(app).get(`/api/v1/products/${ctx.productId}/images`).set("Host", PUBLIC_HOST);
     expect(gallery.status).toBe(200);
     expect(gallery.body.data.some((image) => image.variantId === ctx.variantA.id)).toBe(true);
   });

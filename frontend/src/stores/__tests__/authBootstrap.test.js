@@ -7,8 +7,8 @@ function jsonResponse(payload, { ok = true, status = 200 } = {}) {
   return { ok, status, json: async () => payload };
 }
 
-function routeFetch({ refresh = 'ok', meUser = { id: 'u1', email: 'u@example.com' } } = {}) {
-  const calls = { refresh: 0, logout: 0, login: 0 };
+function routeFetch({ refresh = 'ok', me = 'ok', meUser = { id: 'u1', email: 'u@example.com' } } = {}) {
+  const calls = { refresh: 0, logout: 0, login: 0, me: 0 };
   const mock = vi.fn(async (url, init = {}) => {
     if (url.endsWith('/auth/refresh')) {
       calls.refresh += 1;
@@ -17,6 +17,12 @@ function routeFetch({ refresh = 'ok', meUser = { id: 'u1', email: 'u@example.com
         return jsonResponse(
           { success: false, error: { code: 'AUTH_REFRESH_TOKEN_INVALID', message: 'Refresh token is missing or invalid' } },
           { ok: false, status: 401 },
+        );
+      }
+      if (refresh === 'suspended') {
+        return jsonResponse(
+          { success: false, error: { code: 'COMPANY_SUSPENDED', message: 'Company operations are unavailable while the company is suspended' } },
+          { ok: false, status: 403 },
         );
       }
       if (refresh === 'throttled') {
@@ -39,6 +45,13 @@ function routeFetch({ refresh = 'ok', meUser = { id: 'u1', email: 'u@example.com
       );
     }
     if (url.endsWith('/auth/me')) {
+      calls.me += 1;
+      if (me === 'suspended') {
+        return jsonResponse(
+          { success: false, error: { code: 'COMPANY_SUSPENDED', message: 'Company operations are unavailable while the company is suspended' } },
+          { ok: false, status: 403 },
+        );
+      }
       const authed = Boolean(init.headers?.Authorization);
       if (!authed) {
         return jsonResponse(
@@ -152,6 +165,39 @@ describe('auth bootstrap single-flight (hard-refresh equivalent)', () => {
     expect(state.accessToken).toBeNull();
     expect(state.user).toBeNull();
     expect(calls.logout).toBe(0);
+  });
+
+  it('suspended-company refresh settles the suspension — cleared, error, single refresh, no loop', async () => {
+    const { mock, calls } = routeFetch({ refresh: 'suspended' });
+    vi.stubGlobal('fetch', mock);
+    const { onAuthFailure } = wireSpies();
+
+    await useAuthStore.getState().bootstrap();
+
+    const state = useAuthStore.getState();
+    expect(state.status).toBe('error');
+    expect(state.lastError).toMatchObject({ status: 403, code: 'COMPANY_SUSPENDED' });
+    expect(state.accessToken).toBeNull();
+    expect(state.user).toBeNull();
+    expect(onAuthFailure).not.toHaveBeenCalled();
+    expect(calls.logout).toBe(0);
+    expect(calls.refresh).toBe(1);
+  });
+
+  it('suspended-company identity fetch clears the restored token and settles the suspension', async () => {
+    const { mock, calls } = routeFetch({ refresh: 'ok', me: 'suspended' });
+    vi.stubGlobal('fetch', mock);
+    wireSpies();
+
+    await useAuthStore.getState().bootstrap();
+
+    const state = useAuthStore.getState();
+    expect(state.status).toBe('error');
+    expect(state.lastError).toMatchObject({ status: 403, code: 'COMPANY_SUSPENDED' });
+    expect(state.accessToken).toBeNull();
+    expect(state.user).toBeNull();
+    expect(calls.refresh).toBe(1);
+    expect(calls.me).toBe(1);
   });
 
   it('bad-credential login never triggers a refresh nor clears the session', async () => {

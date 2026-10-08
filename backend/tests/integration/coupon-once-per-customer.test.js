@@ -4,6 +4,7 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany } from "../helpers/userFixtures.js";
 import couponsRepository from "../../src/modules/coupons/coupons.repository.js";
 
 /**
@@ -17,7 +18,8 @@ import couponsRepository from "../../src/modules/coupons/coupons.repository.js";
  */
 
 const RUN = `TSTCU${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
 
 const ctx = {
   categoryId: null,
@@ -41,6 +43,7 @@ async function registerCustomer(tag, body = {}) {
     ...body,
   });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   const address = await request(app)
@@ -75,7 +78,7 @@ async function addCartItems(customer, quantity) {
 }
 
 async function usageRows(couponId, userEmail) {
-  const user = await prisma.user.findUnique({ where: { email: userEmail }, select: { id: true } });
+  const user = await prisma.user.findFirst({ where: { email: userEmail }, select: { id: true } });
   return prisma.couponUsage.findMany({ where: { couponId, userId: user.id } });
 }
 
@@ -269,7 +272,7 @@ describe("one-time-per-customer coupon use", () => {
     });
     expect(second.status).toBe(201);
 
-    const me = await prisma.user.findUnique({ where: { email: customer.email }, select: { id: true } });
+    const me = await prisma.user.findFirst({ where: { email: customer.email }, select: { id: true } });
     const firstWrite = await couponsRepository.recordUsageTx(prisma, {
       couponId: ctx.couponId,
       userId: me.id,

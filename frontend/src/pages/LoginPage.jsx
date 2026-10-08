@@ -7,6 +7,7 @@ import { Container } from '../components/ui/Container.jsx';
 import { FormField, TextInput } from '../components/ui/FormField.jsx';
 import { loginSchema } from '../schemas/auth.schema.js';
 import { zodResolver, applyServerErrors } from '../lib/formValidation.js';
+import { COMPANY_SUSPENDED_CODE, SUSPENSION_SIGNIN_MESSAGE } from '../lib/suspension.js';
 import { useAuthStore } from '../stores/useAuthStore.js';
 
 function safeRedirect(value) {
@@ -19,7 +20,10 @@ function safeRedirect(value) {
 /**
  * Login (`/login?redirect=`, public, redirects away when authenticated).
  * Email normalized client-side; `401` → form-level error; `403` inactive
- * → support message; `429` → backoff. Success returns to `redirect`.
+ * → support message; `403 COMPANY_SUSPENDED` → dedicated suspension
+ * message (checked before the generic 403 branch — suspension is neither
+ * bad credentials nor a disabled account); `429` → backoff. Success
+ * returns to `redirect`.
  */
 export function LoginPage() {
   const navigate = useNavigate();
@@ -59,7 +63,9 @@ export function LoginPage() {
       return;
     }
     const error = result.error;
-    if (error?.code === 'AUTH_INVALID_CREDENTIALS' || error?.status === 401) {
+    if (error?.code === COMPANY_SUSPENDED_CODE) {
+      setError('root', { type: 'server', message: SUSPENSION_SIGNIN_MESSAGE });
+    } else if (error?.code === 'AUTH_INVALID_CREDENTIALS' || error?.status === 401) {
       setError('root', { type: 'server', message: 'Incorrect email or password. Please try again.' });
     } else if (error?.code === 'AUTH_ACCOUNT_INACTIVE' || error?.status === 403) {
       setError('root', { type: 'server', message: 'This account is disabled. Please contact support.' });

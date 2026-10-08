@@ -4,6 +4,7 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany, COMPANY_ONE_ID } from "../helpers/userFixtures.js";
 
 /**
  * Public PDP reviews (GET /reviews/product/:productId).
@@ -14,7 +15,15 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTRP${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
+
+// Phase 2C-26: public reads fail closed on unregistered hosts, so the
+// review-list assertion below resolves Company #1 through an explicit
+// RUN-unique test domain (removed in afterAll) instead of ambient
+// localhost state. Company #1 itself stays read-only.
+const PUBLIC_HOST = `${RUN.toLowerCase()}-public.example.test`;
+let publicDomainId = null;
 
 const ctx = {
   categoryId: null,
@@ -59,6 +68,7 @@ beforeAll(async () => {
     phone: "9999999999",
   });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   ctx.customerToken = loggedIn.body.data.accessToken;
@@ -94,9 +104,17 @@ beforeAll(async () => {
   });
   expect(review.status).toBe(201);
   ctx.reviewId = review.body.data.review.id;
+
+  const publicDomain = await prisma.companyDomain.create({
+    data: { companyId: COMPANY_ONE_ID, domain: PUBLIC_HOST, isPrimary: false, isActive: true },
+  });
+  publicDomainId = publicDomain.id;
 }, 90000);
 
 afterAll(async () => {
+  if (publicDomainId) {
+    await prisma.companyDomain.deleteMany({ where: { id: publicDomainId } });
+  }
   try {
     // Owner-scoped customer delete (admin review deletion no longer exists).
     if (ctx.reviewId) {
@@ -114,7 +132,7 @@ afterAll(async () => {
 
 describe("public product reviews", () => {
   it("lists a submitted review immediately without admin approval", async () => {
-    const res = await request(app).get(`/api/v1/reviews/product/${ctx.productId}`);
+    const res = await request(app).get(`/api/v1/reviews/product/${ctx.productId}`).set("Host", PUBLIC_HOST);
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.data)).toBe(true);
     const row = res.body.data.find((r) => r.id === ctx.reviewId);

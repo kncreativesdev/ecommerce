@@ -2,6 +2,7 @@ const { AppError } = require("../../utils/appError");
 const ordersRepository = require("./orders.repository");
 const couponsService = require("../coupons/coupons.service");
 const { toSafeOrder, toSafeAdminOrder } = require("./orders.utils");
+const { resolveActorSnapshot, assertAuditInput } = require("../audit/audit.service");
 
 /**
  * REAL order state machine (source of truth for admin operations).
@@ -136,6 +137,53 @@ function parseAdminDate(value, field) {
 
 const ORDER_NUMBER_ATTEMPTS = 5;
 
+/**
+ * Phase 2C-2 request guard: every company-scoped order operation needs
+ * the server-resolved companyId (controllers pass
+ * req.companyContext.companyId). A missing value fails closed before
+ * any query runs — platform contexts have no order operations.
+ */
+function assertRequestCompany(companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
+  return companyId;
+}
+
+/**
+ * Maps the repository's cross-company outcome to the same 404 as a
+ * missing order, so callers cannot distinguish the two cases.
+ */
+function throwCrossCompanyNotFound() {
+  throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
+}
+
+/**
+ * Phase 2C-17 business-operation audit. Status/payment transitions are
+ * the audited administrative events (OrderStatusHistory keeps the
+ * domain timeline; notification side-effects are covered by the same
+ * event). Payloads validate up front and commit inside the mutation
+ * transaction via `options.audit`. Customer checkout and self-cancel
+ * are ordinary customer activity and intentionally unaudited.
+ */
+async function snapshotActor(actor) {
+  return actor && actor.id ? resolveActorSnapshot(actor.id) : null;
+}
+
+function orderEvent(snapshot, companyId, details) {
+  return assertAuditInput({
+    actorId: snapshot ? snapshot.id : null,
+    actorRole: snapshot ? snapshot.role : "SYSTEM",
+    actorEmail: snapshot ? snapshot.email : null,
+    companyId,
+    action: "UPDATED",
+    resource: "ORDER",
+    resourceId: null,
+    outcome: "SUCCESS",
+    details: details ?? null,
+  });
+}
+
 function isOrderNumberConflict(err) {
   if (err.code !== "P2002") {
     return false;
@@ -174,7 +222,8 @@ async function nextOrderNumber() {
   return ordersRepository.buildOrderNumber(year, sequence);
 }
 
-async function createOrder(userId, input) {
+async function createOrder(userId, companyId, input) {
+  assertRequestCompany(companyId);
   const shippingAddress = await ordersRepository.findAddressByIdAndUserId(
     input.shippingAddressId,
     userId
@@ -216,7 +265,7 @@ async function createOrder(userId, input) {
   // overshooting the limit.
   let coupon = null;
   if (input.couponCode !== undefined) {
-    const quote = await couponsService.validateCouponForUserCart(userId, input.couponCode);
+    const quote = await couponsService.validateCouponForUserCart(userId, companyId, input.couponCode);
     coupon = { couponId: quote.coupon.id, discountTotal: quote.discountAmount };
   }
 
@@ -227,6 +276,7 @@ async function createOrder(userId, input) {
     try {
       result = await ordersRepository.createOrderTransaction(
         userId,
+        companyId,
         orderNumber,
         shippingAddress,
         billingAddress,
@@ -243,13 +293,22 @@ async function createOrder(userId, input) {
     if (result.outcome === "empty") {
       throw new AppError(422, "ORDER_EMPTY_CART", "Cart is empty");
     }
+    if (result.outcome === "cross-company") {
+      // Same code as an unknown variant id: the caller cannot tell a
+      // cross-company line from a nonexistent one.
+      throw new AppError(404, "PRODUCT_VARIANT_NOT_FOUND", "Product variant not found");
+    }
+    if (result.outcome === "cross-company-coupon") {
+      // Same code as an unknown coupon code: no redemption oracle.
+      throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
+    }
     if (result.outcome === "inactive") {
       throw new AppError(422, "ORDER_VARIANT_INACTIVE", "One or more cart items are not available");
     }
     if (result.outcome === "insufficient") {
       throw new AppError(409, "ORDER_INSUFFICIENT_STOCK", "Insufficient stock for one or more items");
     }
-    return getOrder(userId, result.orderId);
+    return getOrder(userId, companyId, result.orderId);
   }
 
   if (lastError) {
@@ -258,13 +317,15 @@ async function createOrder(userId, input) {
   throw new AppError(500, "ORDER_NUMBER_GENERATION_FAILED", "Could not generate a unique order number");
 }
 
-async function listOrders(userId) {
-  const rows = await ordersRepository.findOrdersByUserId(userId);
+async function listOrders(userId, companyId) {
+  assertRequestCompany(companyId);
+  const rows = await ordersRepository.findOrdersByUserId(userId, companyId);
   return rows.map(toSafeOrder);
 }
 
-async function getOrder(userId, id) {
-  const row = await ordersRepository.findOrderByIdAndUserId(id, userId);
+async function getOrder(userId, companyId, id) {
+  assertRequestCompany(companyId);
+  const row = await ordersRepository.findOrderByIdAndUserId(id, userId, companyId);
   if (!row) {
     throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
   }
@@ -279,8 +340,9 @@ async function getOrder(userId, id) {
  * Ownership is enforced by the owner-scoped read: missing rows and other
  * users' orders are both 404 ORDER_NOT_FOUND, never distinguished.
  */
-async function cancelOrder(userId, id) {
-  const current = await ordersRepository.findOrderByIdAndUserId(id, userId);
+async function cancelOrder(userId, companyId, id) {
+  assertRequestCompany(companyId);
+  const current = await ordersRepository.findOrderByIdAndUserId(id, userId, companyId);
   if (!current) {
     throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
   }
@@ -305,6 +367,7 @@ async function cancelOrder(userId, id) {
   }
   const result = await ordersRepository.updateOrderStatusTransaction(
     id,
+    companyId,
     current.status,
     "CANCELLED",
     {
@@ -313,8 +376,8 @@ async function cancelOrder(userId, id) {
       notification: orderStatusNotification(current.orderNumber, "CANCELLED"),
     }
   );
-  if (result.outcome === "missing") {
-    throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
+  if (result.outcome === "missing" || result.outcome === "cross-company") {
+    throwCrossCompanyNotFound();
   }
   if (result.outcome === "conflict") {
     throw new AppError(
@@ -323,10 +386,11 @@ async function cancelOrder(userId, id) {
       `Order changed while updating (now ${result.status}). Reload and retry.`
     );
   }
-  return getOrder(userId, id);
+  return getOrder(userId, companyId, id);
 }
 
-async function listOrdersAdmin(query) {
+async function listOrdersAdmin(companyId, query) {
+  assertRequestCompany(companyId);
   const page = query.page ?? ADMIN_DEFAULT_PAGE;
   const limit = Math.min(query.limit ?? ADMIN_DEFAULT_LIMIT, ADMIN_MAX_LIMIT);
   const fromDate = query.from ? parseAdminDate(query.from, "from") : null;
@@ -338,6 +402,7 @@ async function listOrdersAdmin(query) {
   const city = query.city ? query.city.trim() : "";
   const state = query.state ? query.state.trim() : "";
   const { rows, total } = await ordersRepository.findOrdersAdmin({
+    companyId,
     status: query.status ?? null,
     paymentStatus: query.paymentStatus ?? null,
     search: search === "" ? null : search,
@@ -361,18 +426,20 @@ async function listOrdersAdmin(query) {
   };
 }
 
-async function getOrderAdmin(id) {
-  const row = await ordersRepository.findOrderByIdAdmin(id);
+async function getOrderAdmin(companyId, id) {
+  assertRequestCompany(companyId);
+  const row = await ordersRepository.findOrderByIdAdmin(id, companyId);
   if (!row) {
     throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
   }
   return toSafeAdminOrder(row);
 }
 
-async function updateOrderStatusAdmin(id, nextStatus, options = {}) {
-  const current = await ordersRepository.findOrderByIdAdmin(id);
+async function updateOrderStatusAdmin(companyId, id, nextStatus, options = {}, actor = null) {
+  assertRequestCompany(companyId);
+  const current = await ordersRepository.findOrderByIdAdmin(id, companyId);
   if (!current) {
-    throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
+    throwCrossCompanyNotFound();
   }
   if (current.status === nextStatus) {
     throw new AppError(
@@ -395,16 +462,18 @@ async function updateOrderStatusAdmin(id, nextStatus, options = {}) {
   }
   const result = await ordersRepository.updateOrderStatusTransaction(
     id,
+    companyId,
     current.status,
     nextStatus,
     {
       note: options.note ?? null,
       createdBy: options.createdBy ?? null,
       notification: orderStatusNotification(current.orderNumber, nextStatus),
+      audit: orderEvent(await snapshotActor(actor), companyId, { from: current.status, to: nextStatus }),
     }
   );
-  if (result.outcome === "missing") {
-    throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
+  if (result.outcome === "missing" || result.outcome === "cross-company") {
+    throwCrossCompanyNotFound();
   }
   if (result.outcome === "conflict") {
     throw new AppError(
@@ -413,7 +482,34 @@ async function updateOrderStatusAdmin(id, nextStatus, options = {}) {
       `Order changed while updating (now ${result.status}). Reload and retry.`
     );
   }
-  return getOrderAdmin(id);
+  return getOrderAdmin(companyId, id);
+}
+
+/**
+ * Bounded deadlock-victim retry for the bulk status transaction
+ * (Phase 2C-30). Mirrors the CompanyDomain `withWriteRetry` pattern:
+ * concurrent bulks lock the same order/history/audit rows in
+ * overlapping orders, so MySQL may abort one transaction with 1213
+ * (surfaced as Prisma P2034). Retrying ONLY the rolled-back
+ * transaction is safe: nothing persisted, and the re-execution
+ * re-reads + re-validates every order inside the new transaction
+ * (the conditional `updateMany` turns genuine races into 409
+ * ORDER_CONCURRENT_UPDATE, never double-applies). Any other error
+ * propagates immediately without retry. Exported as a test seam
+ * (same precedent as the pure company-context helpers).
+ */
+async function withTransactionRetry(operation) {
+  const MAX_ATTEMPTS = 4;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (err) {
+      if (!err || err.code !== "P2034" || attempt >= MAX_ATTEMPTS) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10 * attempt));
+    }
+  }
 }
 
 /**
@@ -428,12 +524,13 @@ async function updateOrderStatusAdmin(id, nextStatus, options = {}) {
  * notification each, atomically). Concurrency conflicts roll back the
  * whole bulk — never partial success reported as success.
  */
-async function bulkUpdateOrderStatusAdmin(orderIds, nextStatus, options = {}) {
+async function bulkUpdateOrderStatusAdmin(companyId, orderIds, nextStatus, options = {}, actor = null) {
+  assertRequestCompany(companyId);
   const uniqueIds = [...new Set(orderIds)];
   const failures = [];
   const expectedById = {};
   for (const id of uniqueIds) {
-    const current = await ordersRepository.findOrderByIdAdmin(id);
+    const current = await ordersRepository.findOrderByIdAdmin(id, companyId);
     if (!current) {
       failures.push({ orderId: id, code: "ORDER_NOT_FOUND", message: "Order not found" });
       continue;
@@ -462,20 +559,31 @@ async function bulkUpdateOrderStatusAdmin(orderIds, nextStatus, options = {}) {
   if (failures.length > 0) {
     throw new AppError(409, "ORDER_BULK_VALIDATION_FAILED", "One or more orders cannot make the requested transition", failures);
   }
-  await ordersRepository.bulkUpdateOrderStatusTransaction(uniqueIds, expectedById, nextStatus, {
-    note: options.note ?? null,
-    createdBy: options.createdBy ?? null,
-    notificationFor: (orderNumber, status) => orderStatusNotification(orderNumber, status),
-  });
+  // One audit event per transitioned order, committed inside the same
+  // all-or-nothing transaction — a rolled-back bulk leaves no rows.
+  const snapshot = await snapshotActor(actor);
+  const auditsById = {};
+  for (const id of uniqueIds) {
+    auditsById[id] = orderEvent(snapshot, companyId, { from: expectedById[id], to: nextStatus });
+  }
+  await withTransactionRetry(() =>
+    ordersRepository.bulkUpdateOrderStatusTransaction(uniqueIds, companyId, expectedById, nextStatus, {
+      note: options.note ?? null,
+      createdBy: options.createdBy ?? null,
+      notificationFor: (orderNumber, status) => orderStatusNotification(orderNumber, status),
+      auditsById,
+    })
+  );
   const orders = [];
   for (const id of uniqueIds) {
-    orders.push(await getOrderAdmin(id));
+    orders.push(await getOrderAdmin(companyId, id));
   }
   return { orders };
 }
 
-async function updateOrderPaymentStatusAdmin(id, nextStatus) {
-  const current = await ordersRepository.findOrderByIdAdmin(id);
+async function updateOrderPaymentStatusAdmin(companyId, id, nextStatus, actor = null) {
+  assertRequestCompany(companyId);
+  const current = await ordersRepository.findOrderByIdAdmin(id, companyId);
   if (!current) {
     throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
   }
@@ -502,11 +610,13 @@ async function updateOrderPaymentStatusAdmin(id, nextStatus) {
   }
   const result = await ordersRepository.updateOrderPaymentStatusTransaction(
     id,
+    companyId,
     latest.status,
-    nextStatus
+    nextStatus,
+    orderEvent(await snapshotActor(actor), companyId, { from: latest.status, to: nextStatus, scope: "payment" })
   );
-  if (result.outcome === "missing") {
-    throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
+  if (result.outcome === "missing" || result.outcome === "cross-company") {
+    throwCrossCompanyNotFound();
   }
   if (result.outcome === "payment-missing") {
     throw new AppError(409, "ORDER_PAYMENT_MISSING", "Order has no payment record to update");
@@ -518,7 +628,7 @@ async function updateOrderPaymentStatusAdmin(id, nextStatus) {
       `Payment changed while updating (now ${result.status}). Reload and retry.`
     );
   }
-  return getOrderAdmin(id);
+  return getOrderAdmin(companyId, id);
 }
 
 module.exports = {
@@ -531,6 +641,7 @@ module.exports = {
   updateOrderStatusAdmin,
   bulkUpdateOrderStatusAdmin,
   updateOrderPaymentStatusAdmin,
+  withTransactionRetry,
   ORDER_STATUS_TRANSITIONS,
   ORDER_STATUS_SEQUENCE,
   ORDER_IN_PROCESS_STATUSES,

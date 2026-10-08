@@ -17,6 +17,7 @@ import { useCheckoutStore } from '../stores/useCheckoutStore.js';
 import { createOrder } from '../services/orders.service.js';
 import { fetchAddresses } from '../services/addresses.service.js';
 import { updateProfile } from '../services/users.service.js';
+import { COMPANY_SUSPENDED_CODE, SUSPENSION_MESSAGE, SUSPENSION_TITLE } from '../lib/suspension.js';
 import { formatINR } from '../lib/format.js';
 import { cn } from '../lib/cn.js';
 
@@ -244,6 +245,11 @@ export function CheckoutPage() {
       // exhaustion is a 409 that must not route to the stock/cart flow.
       if (typeof error?.code === 'string' && error.code.startsWith('COUPON_')) {
         toast.error(error?.message ?? 'Coupon could not be applied to this order.');
+      } else if (error?.code === COMPANY_SUSPENDED_CODE) {
+        // Suspended company: stay on the review step with the dedicated
+        // message — never clear the cart, never navigate away. Placing
+        // the order again cannot succeed until access is restored.
+        toast.error(SUSPENSION_MESSAGE);
       } else if (error?.code === 'ORDER_PHONE_REQUIRED') {
         // Missing profile phone: stay on the review step with the precise
         // backend message — never clear the cart, never navigate away, never
@@ -282,11 +288,12 @@ export function CheckoutPage() {
   }
 
   if (addressStatus === 'error') {
+    const addressSuspended = addressError?.code === COMPANY_SUSPENDED_CODE;
     return (
       <Container className="py-10 sm:py-14">
         <ErrorState
-          title="Couldn’t load checkout"
-          message={addressError?.message ?? 'Please try again.'}
+          title={addressSuspended ? SUSPENSION_TITLE : 'Couldn’t load checkout'}
+          message={addressSuspended ? SUSPENSION_MESSAGE : (addressError?.message ?? 'Please try again.')}
           onRetry={() => setAddressReloadToken((token) => token + 1)}
         />
       </Container>

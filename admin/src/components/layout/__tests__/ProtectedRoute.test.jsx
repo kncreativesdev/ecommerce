@@ -8,11 +8,11 @@ function jsonResponse(payload, { ok = true, status = 200 } = {}) {
   return { ok, status, json: async () => payload };
 }
 
-function renderGuard(initialPath = '/dashboard') {
+function renderGuard(initialPath = '/dashboard', allowedRoles) {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
-        <Route element={<ProtectedRoute />}>
+        <Route element={<ProtectedRoute allowedRoles={allowedRoles} />}>
           <Route path="/dashboard" element={<p>Dashboard page</p>} />
         </Route>
         <Route path="/login" element={<p>Login page</p>} />
@@ -49,6 +49,39 @@ describe('admin ProtectedRoute bootstrap states', () => {
     useAuthStore.setState({ accessToken: null, user: null, status: 'logged-out', error: null });
     renderGuard();
     expect(screen.getByText('Login page')).toBeInTheDocument();
+  });
+
+  it.each([['SUPER_ADMIN'], ['ADMIN'], ['HEAD'], ['MEMBER']])(
+    'admits %s through the default common-panel guard',
+    (role) => {
+      useAuthStore.setState({ accessToken: 't', user: { id: 'u1', roles: [role] }, status: 'ready' });
+      renderGuard();
+      expect(screen.getByText('Dashboard page')).toBeInTheDocument();
+    },
+  );
+
+  it.each([['CUSTOMER'], ['OWNER']])('redirects %s to login through the default guard', (role) => {
+    useAuthStore.setState({ accessToken: 't', user: { id: 'u1', roles: [role] }, status: 'ready' });
+    renderGuard();
+    expect(screen.getByText('Login page')).toBeInTheDocument();
+  });
+
+  it('redirects roleless users to login', () => {
+    useAuthStore.setState({ accessToken: 't', user: { id: 'u1', roles: [] }, status: 'ready' });
+    renderGuard();
+    expect(screen.getByText('Login page')).toBeInTheDocument();
+  });
+
+  it('preserves ADMIN-only routes: HEAD is redirected when only ADMIN is allowed', () => {
+    useAuthStore.setState({ accessToken: 't', user: { id: 'h1', roles: ['HEAD'] }, status: 'ready' });
+    renderGuard('/dashboard', ['ADMIN']);
+    expect(screen.getByText('Login page')).toBeInTheDocument();
+  });
+
+  it('keeps ADMIN on ADMIN-only routes', () => {
+    useAuthStore.setState({ accessToken: 't', user: { id: 'a1', roles: ['ADMIN'] }, status: 'ready' });
+    renderGuard('/dashboard', ['ADMIN']);
+    expect(screen.getByText('Dashboard page')).toBeInTheDocument();
   });
 
   it('shows a recoverable error panel — never a login redirect — on transient bootstrap failure', async () => {

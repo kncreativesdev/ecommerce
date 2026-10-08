@@ -21,4 +21,42 @@ const googleSignInSchema = z
   })
   .strict();
 
-module.exports = { registerSchema, loginSchema, googleSignInSchema };
+const forgotPasswordSchema = z
+  .object({
+    email: emailSchema,
+  })
+  .strict();
+
+const otpCodeSchema = z.string().trim().regex(/^\d{6}$/, "Invalid verification code");
+
+const verifyResetOtpSchema = z
+  .object({
+    email: emailSchema,
+    otp: otpCodeSchema,
+  })
+  .strict();
+
+const resetPasswordSchema = z
+  .object({
+    email: emailSchema,
+    otp: otpCodeSchema,
+    newPassword: z.string().min(8).max(128),
+  })
+  .strict();
+
+const changePasswordSchema = z
+  .object({
+    otp: otpCodeSchema,
+    newPassword: z.string().min(8).max(128),
+  })
+  .strict();
+
+module.exports = {
+  registerSchema,
+  loginSchema,
+  googleSignInSchema,
+  forgotPasswordSchema,
+  verifyResetOtpSchema,
+  resetPasswordSchema,
+  changePasswordSchema,
+};

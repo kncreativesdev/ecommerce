@@ -21,9 +21,21 @@ function parseDetailScope(query) {
   return scope;
 }
 
+/**
+ * Server-resolved tenant. Public reads carry no companyContext (null →
+ * unscoped global catalog, exactly as before); the mounted admin
+ * branch supplies the company for inactive/all reads. Mutations fail
+ * closed on null inside the service.
+ */
+function companyIdOf(req) {
+  return req.companyContext && typeof req.companyContext.companyId === "string"
+    ? req.companyContext.companyId
+    : null;
+}
+
 async function list(req, res, next) {
   try {
-    const categories = await categoriesService.listCategories(parseListStatus(req.query));
+    const categories = await categoriesService.listCategories(parseListStatus(req.query), companyIdOf(req));
     return res.status(200).json({ success: true, data: categories });
   } catch (err) {
     return next(err);
@@ -32,17 +44,33 @@ async function list(req, res, next) {
 
 async function getById(req, res, next) {
   try {
-    const category = await categoriesService.getCategory(req.params.id, parseDetailScope(req.query));
+    const category = await categoriesService.getCategory(req.params.id, parseDetailScope(req.query), companyIdOf(req));
     return res.status(200).json({ success: true, data: { category } });
   } catch (err) {
     return next(err);
   }
 }
 
+/**
+ * Server-resolved tenant for catalog writes. The mounted companyContext
+ * guarantees the value (or rejects the request first); a missing value
+ * fails closed inside the service.
+ */
+function companyIdOf(req) {
+  return req.companyContext && typeof req.companyContext.companyId === "string"
+    ? req.companyContext.companyId
+    : null;
+}
+
 async function create(req, res, next) {
   try {
     const input = createCategorySchema.parse(req.body);
-    const category = await categoriesService.createCategory(input);
+    // Roles ride along for the Phase 3-1 active-state guard (ADMIN +
+    // HEAD may write `isActive`; MEMBER may not). Snapshots use id.
+    const category = await categoriesService.createCategory(companyIdOf(req), input, {
+      id: req.user.id,
+      roles: req.user.roles,
+    });
     return res.status(201).json({ success: true, data: { category } });
   } catch (err) {
     return next(err);
@@ -52,7 +80,10 @@ async function create(req, res, next) {
 async function update(req, res, next) {
   try {
     const input = updateCategorySchema.parse(req.body);
-    const category = await categoriesService.updateCategory(req.params.id, input);
+    const category = await categoriesService.updateCategory(req.params.id, companyIdOf(req), input, {
+      id: req.user.id,
+      roles: req.user.roles,
+    });
     return res.status(200).json({ success: true, data: { category } });
   } catch (err) {
     return next(err);
@@ -61,7 +92,7 @@ async function update(req, res, next) {
 
 async function remove(req, res, next) {
   try {
-    const category = await categoriesService.deactivateCategory(req.params.id);
+    const category = await categoriesService.deactivateCategory(req.params.id, companyIdOf(req), { id: req.user.id });
     return res.status(200).json({ success: true, data: { category } });
   } catch (err) {
     return next(err);
@@ -70,7 +101,9 @@ async function remove(req, res, next) {
 
 async function uploadImage(req, res, next) {
   try {
-    const category = await categoriesService.uploadCategoryImage(req.params.id, req.file);
+    const category = await categoriesService.uploadCategoryImage(req.params.id, companyIdOf(req), req.file, {
+      id: req.user.id,
+    });
     return res.status(200).json({ success: true, data: { category } });
   } catch (err) {
     return next(err);
@@ -79,7 +112,7 @@ async function uploadImage(req, res, next) {
 
 async function removeImage(req, res, next) {
   try {
-    const category = await categoriesService.removeCategoryImage(req.params.id);
+    const category = await categoriesService.removeCategoryImage(req.params.id, companyIdOf(req), { id: req.user.id });
     return res.status(200).json({ success: true, data: { category } });
   } catch (err) {
     return next(err);

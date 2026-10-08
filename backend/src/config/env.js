@@ -73,10 +73,25 @@ const env = {
   refreshCookieSecure: parseSecureFlag(process.env.REFRESH_COOKIE_SECURE),
   authRateLimitWindowMs: parsePositiveInt(process.env.AUTH_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
   authRateLimitMax: parsePositiveInt(process.env.AUTH_RATE_LIMIT_MAX, 30),
+  // Audit retention cleanup interval (Phase 2C-19 in-process worker).
+  // First run happens one interval after boot; NEVER policy still
+  // deletes nothing. Single deployment = single scheduler.
+  auditCleanupIntervalMs: parsePositiveInt(process.env.AUDIT_CLEANUP_INTERVAL_MS, 24 * 60 * 60 * 1000),
   // Google Identity Services OAuth client ID ("...apps.googleusercontent.com").
   // Empty until configured — the Google sign-in endpoint then answers 503
   // AUTH_GOOGLE_NOT_CONFIGURED and the storefront hides the button.
   googleClientId: typeof process.env.GOOGLE_CLIENT_ID === "string" ? process.env.GOOGLE_CLIENT_ID.trim() : "",
+  // Outbound email (Nodemailer SMTP) for credential OTP delivery.
+  // Empty host until configured — OTP endpoints then answer 503
+  // EMAIL_NOT_CONFIGURED (tests capture mail in-memory instead).
+  mailSmtpHost: typeof process.env.MAIL_SMTP_HOST === "string" ? process.env.MAIL_SMTP_HOST.trim() : "",
+  mailSmtpPort: parsePositiveInt(process.env.MAIL_SMTP_PORT, 587),
+  mailSmtpUser: typeof process.env.MAIL_SMTP_USER === "string" ? process.env.MAIL_SMTP_USER : "",
+  mailSmtpPass: typeof process.env.MAIL_SMTP_PASS === "string" ? process.env.MAIL_SMTP_PASS : "",
+  mailFrom:
+    typeof process.env.MAIL_FROM === "string" && process.env.MAIL_FROM.trim() !== ""
+      ? process.env.MAIL_FROM.trim()
+      : "Tech Pulse <no-reply@localhost>",
 };
 
 module.exports = { env };

@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CategoriesPage } from '../CategoriesPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useCategoryStore } from '../../stores/useCategoryStore.js';
 import { fetchCategories } from '../../services/category.service.js';
 
@@ -139,5 +140,47 @@ describe('CategoriesPage refresh', () => {
 
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(fetchCategories).toHaveBeenCalled();
+  });
+});
+
+describe('CategoriesPage HEAD role gating', () => {
+  it('hides the status filter but keeps create/edit/deactivate', async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    useCategoryStore.setState({
+      categories: [
+        {
+          id: 'c1',
+          parentId: null,
+          name: 'Audio',
+          slug: 'audio',
+          description: null,
+          image: null,
+          isActive: true,
+          sortOrder: 0,
+          children: [],
+        },
+      ],
+      status: 'success',
+      error: null,
+    });
+    renderPage();
+    await screen.findByText('Audio');
+
+    expect(screen.queryByRole('group', { name: 'Category status filter' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add Category' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit Audio' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deactivate Audio' })).toBeInTheDocument();
+  });
+
+  it('shows the status filter to ADMIN', async () => {
+    useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
+    useCategoryStore.setState({
+      categories: [],
+      status: 'success',
+      error: null,
+    });
+    renderPage();
+
+    expect(screen.getByRole('group', { name: 'Category status filter' })).toBeInTheDocument();
   });
 });

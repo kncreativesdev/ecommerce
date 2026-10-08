@@ -4,6 +4,7 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany, COMPANY_ONE_ID } from "../helpers/userFixtures.js";
 
 /**
  * End-to-end order lifecycle against live MySQL (supertest):
@@ -20,7 +21,15 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTLC${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
+
+// Phase 2C-26: public reads fail closed on unregistered hosts, so the
+// announcement assertions below resolve Company #1 through an explicit
+// RUN-unique test domain (removed in afterAll) instead of ambient
+// localhost state. Company #1 itself stays read-only.
+const PUBLIC_HOST = `${RUN.toLowerCase()}-public.example.test`;
+let publicDomainId = null;
 
 const ctx = {
   customerToken: null,
@@ -52,6 +61,7 @@ async function registerCustomer() {
     .post("/api/v1/auth/register")
     .send({ email, password: "TestPass123!", firstName: "Lifecycle", lastName: "Tester", phone: "9999999999" });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   ctx.customerId = registered.body.data.user.id;
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
@@ -116,9 +126,17 @@ beforeAll(async () => {
   });
   expect(address.status).toBe(201);
   ctx.addressId = address.body.data.address.id;
+
+  const publicDomain = await prisma.companyDomain.create({
+    data: { companyId: COMPANY_ONE_ID, domain: PUBLIC_HOST, isPrimary: false, isActive: true },
+  });
+  publicDomainId = publicDomain.id;
 }, 60000);
 
 afterAll(async () => {
+  if (publicDomainId) {
+    await prisma.companyDomain.deleteMany({ where: { id: publicDomainId } });
+  }
   // Product lifecycle cleanup (deactivate first, then delete).
   try {
     await request(app).patch(`/api/v1/products/${ctx.productId}`).set(adminHeaders()).send({ isActive: false });
@@ -271,9 +289,10 @@ describe("transition guards", () => {
     expect(customerWrite.status).toBe(403);
 
     const otherEmail = `${RUN.toLowerCase()}-other@example.test`;
-    await request(app)
+    const otherReg = await request(app)
       .post("/api/v1/auth/register")
       .send({ email: otherEmail, password: "TestPass123!", firstName: "Other" });
+    await stampUserCompany(otherReg.body.data.user.id);
     const otherLogin = await request(app)
       .post("/api/v1/auth/login")
       .send({ email: otherEmail, password: "TestPass123!" });
@@ -351,7 +370,7 @@ describe("site announcements (admin-editable top bar)", () => {
     // active announcement from preserved database data, or null). Captured
     // so expiry asserts a revert without assuming a globally empty bar —
     // no other test file writes announcements, so the revert is deterministic.
-    const baseline = await request(app).get("/api/v1/announcements/current");
+    const baseline = await request(app).get("/api/v1/announcements/current").set("Host", PUBLIC_HOST);
     expect(baseline.status).toBe(200);
 
     const created = await request(app)
@@ -368,7 +387,7 @@ describe("site announcements (admin-editable top bar)", () => {
     expect(created.status).toBe(201);
     ctx.announcementId = created.body.data.announcement.id;
 
-    const current = await request(app).get("/api/v1/announcements/current");
+    const current = await request(app).get("/api/v1/announcements/current").set("Host", PUBLIC_HOST);
     expect(current.status).toBe(200);
     expect(current.body.data.announcement.message).toBe(`${RUN} Festive Sale — up to 40% off`);
     // Public shape exposes no admin metadata.
@@ -381,7 +400,7 @@ describe("site announcements (admin-editable top bar)", () => {
 
     // Expiry hides it: the bar reverts to the pre-test baseline (null on a
     // clean database) and never shows the expired message.
-    const gone = await request(app).get("/api/v1/announcements/current");
+    const gone = await request(app).get("/api/v1/announcements/current").set("Host", PUBLIC_HOST);
     expect(gone.status).toBe(200);
     expect(gone.body.data.announcement).toEqual(baseline.body.data.announcement);
     expect(gone.body.data.announcement?.message ?? null).not.toBe(

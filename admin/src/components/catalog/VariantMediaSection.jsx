@@ -14,11 +14,12 @@ import {
   uploadProductImage,
 } from '../../services/media.service.js';
 import { mediaUploadErrorMessage, validateChosenFile } from '../../utils/imageSelection.js';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { cn } from '../../lib/cn.js';
 
 /**
  * Per-variant media galleries for the product edit page. ONE
- * `GET /products/:id/images` fetch per product; rows are partitioned
+ * `GET /products/:id/images/admin` fetch per product; rows are partitioned
  * client-side by `variantId` (the backend returns every image with its
  * scope already ordered). Each variant card shows its own images, count,
  * upload (preset `variantId` — same `uploadProductImage` service the
@@ -38,6 +39,12 @@ import { cn } from '../../lib/cn.js';
  * another variant's images.
  */
 export function VariantMediaSection({ productId, variants = [] }) {
+  // Hard image removal is the ADMIN-only DELETE action
+  // (`DELETE /products/:id/images/:imageId`, backend 403s HEAD/MEMBER —
+  // same endpoint as MediaManager, which already gates via `isAdmin()`).
+  // Upload + metadata edit (primary/sort) stay for HEAD/MEMBER.
+  const isAdmin = useAuthStore((state) => state.isAdmin());
+  const canDeleteImage = isAdmin;
   const [images, setImages] = useState(null);
   const [error, setError] = useState(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -283,6 +290,7 @@ export function VariantMediaSection({ productId, variants = [] }) {
                                 Primary
                               </button>
                             )}
+                            {canDeleteImage ? (
                             <button
                               type="button"
                               onClick={() => setDeleting(image)}
@@ -292,6 +300,7 @@ export function VariantMediaSection({ productId, variants = [] }) {
                             >
                               <Trash2 size={15} aria-hidden="true" />
                             </button>
+                            ) : null}
                           </span>
                           <span className="flex items-center gap-1.5">
                             <label htmlFor={`sort-${image.id}`} className="sr-only">
@@ -347,3 +356,4 @@ export function VariantMediaSection({ productId, variants = [] }) {
     </section>
   );
 }
+

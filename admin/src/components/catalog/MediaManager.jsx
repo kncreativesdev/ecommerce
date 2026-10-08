@@ -13,6 +13,7 @@ import { Modal } from '../ui/Modal.jsx';
 import { Field, Input, Select, Checkbox } from '../ui/Field.jsx';
 import { applyServerErrors } from '../../utils/serverErrors.js';
 import { validateChosenFile } from '../../utils/imageSelection.js';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import {
   deleteProductImage,
   fetchProductImages,
@@ -468,6 +469,9 @@ function MetadataForm({ initialValue, variants, submitting, onSubmit, onCancel }
 }
 
 export function MediaManager({ productId, productName, variants = [] }) {
+  // Hard image delete stays ADMIN-only (backend 403s HEAD there);
+  // upload + metadata edit follow the shared HEAD contract.
+  const isAdmin = useAuthStore((state) => state.isAdmin());
   const [images, setImages] = useState([]);
   const [status, setStatus] = useState('loading');
   const [loadError, setLoadError] = useState(null);
@@ -635,6 +639,7 @@ export function MediaManager({ productId, productName, variants = [] }) {
                   >
                     <Pencil size={16} aria-hidden="true" />
                   </button>
+                  {isAdmin ? (
                   <button
                     type="button"
                     onClick={() => setDeleting(image)}
@@ -644,6 +649,7 @@ export function MediaManager({ productId, productName, variants = [] }) {
                   >
                     <Trash2 size={16} aria-hidden="true" />
                   </button>
+                  ) : null}
                 </span>
               </td>
             </tr>

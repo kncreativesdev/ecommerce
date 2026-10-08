@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CouponForm } from '../CouponForm.jsx';
+import { useAuthStore } from '../../../stores/useAuthStore.js';
 
 function renderForm(props = {}) {
   return render(<CouponForm onSubmit={vi.fn()} products={[]} productsLoading={false} {...props} />);
@@ -80,5 +81,28 @@ describe('CouponForm create payload', () => {
 
     expect(await screen.findByText('This code is already taken.')).toBeInTheDocument();
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CouponForm Active toggle role gating', () => {
+  it('shows the Active toggle to ADMIN', () => {
+    useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
+    renderForm();
+    expect(screen.getByRole('checkbox', { name: 'Active (available for validation)' })).toBeInTheDocument();
+  });
+
+  it('hides the Active toggle for HEAD (create still defaults active)', async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue({});
+    renderForm({ onSubmit });
+    expect(screen.queryByRole('checkbox', { name: 'Active (available for validation)' })).not.toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText('e.g. FESTIVE10'), 'head10');
+    await user.type(screen.getByPlaceholderText('e.g. 10 or 200.00'), '10');
+    await user.click(screen.getByRole('button', { name: 'Create coupon' }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ isActive: true }));
   });
 });

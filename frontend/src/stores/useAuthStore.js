@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { isSessionInvalidError, setAuthHandler, sharedRefresh } from '../lib/apiClient.js';
+import { isCompanySuspendedError, isSessionInvalidError, setAuthHandler, sharedRefresh } from '../lib/apiClient.js';
 import { resetGuestSync, syncGuestAfterAuth } from '../lib/guestSync.js';
 import {
   fetchCurrentUser,
@@ -26,6 +26,8 @@ import { useAnnouncementStore } from './useAnnouncementStore.js';
  * - `bootstrap()`: one coordinated silent-refresh attempt on app boot
  *   (shared single-flight with concurrent 401s), then `GET /auth/me`.
  *   Definitive rejection (`401`/`403` + `AUTH_*`) settles anonymous;
+ *   suspended company (`403 COMPANY_SUSPENDED`) settles `error` carrying
+ *   the suspension — mirrors cleared, retryable, never a login redirect;
  *   transient failure (`429`/`5xx`/network) settles `error` — recoverable
  *   via retry, never a false logout, never a cookie destroy. Without a
  *   valid cookie the user stays logged out (no login flash, no error toast).
@@ -163,7 +165,13 @@ export const useAuthStore = create((set, get) => ({
       // racing refreshes per hard reload.
       accessToken = await sharedRefresh();
     } catch (error) {
-      if (isSessionInvalidError(error)) {
+      if (isCompanySuspendedError(error)) {
+        // Definitive: no session can operate while the company is
+        // suspended. Settle the suspension (never anonymous-ready, so
+        // guards render the suspended state instead of redirecting to
+        // login); retry re-runs bootstrap and recovers after restore.
+        set({ accessToken: null, user: null, status: 'error', lastError: error });
+      } else if (isSessionInvalidError(error)) {
         // Definitive: the refresh credential is unusable → anonymous.
         set({ accessToken: null, user: null, status: 'ready', lastError: null });
       } else {
@@ -187,7 +195,12 @@ export const useAuthStore = create((set, get) => ({
       }
       await get().setSession(accessToken, user);
     } catch (error) {
-      if (isSessionInvalidError(error)) {
+      if (isCompanySuspendedError(error)) {
+        // Token restored but the company is suspended: the session is
+        // inoperable, so clear it and settle the suspension (same shape
+        // as the refresh path above — retryable, never a login loop).
+        set({ accessToken: null, user: null, status: 'error', lastError: error });
+      } else if (isSessionInvalidError(error)) {
         set({ accessToken: null, user: null, status: 'ready', lastError: null });
       } else {
         // Token restored but identity fetch failed transiently: keep the

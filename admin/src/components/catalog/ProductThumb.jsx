@@ -4,7 +4,7 @@ import { fetchProductImages, resolveImageUrl } from '../../services/media.servic
 import { pickDefaultVariantImage } from '../../utils/productMedia.js';
 import { cn } from '../../lib/cn.js';
 
-// Session cache: one `GET /products/:id/images` per product, shared across
+// Session cache: one `GET /products/:id/images/admin` per product, shared across
 // every row (the product list endpoint embeds no images).
 const imageCache = new Map();
 
@@ -25,7 +25,7 @@ function loadImages(productId) {
  * Compact main/default product thumbnail for dense admin rows.
  *
  * Uses the established default-variant image rule (same priority as the
- * storefront card) over `GET /products/:id/images` — no new API, no new
+ * storefront card) over `GET /products/:id/images/admin` — no new API, no new
  * selection algorithm. Fixed small square subordinate to the product name;
  * `object-contain` never crops; missing/broken images fall back to the
  * neutral tile.
@@ -81,3 +81,4 @@ export function ProductThumb({ product, className }) {
     />
   );
 }
+

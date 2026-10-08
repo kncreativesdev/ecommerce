@@ -4,6 +4,7 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany, COMPANY_ONE_ID } from "../helpers/userFixtures.js";
 
 /**
  * Customer review creation + immediate visibility (no admin approval):
@@ -18,7 +19,8 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTRV${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
 
 const ctx = {
   categoryId: null,
@@ -34,12 +36,20 @@ const ctx = {
 const reviewerHeaders = () => ({ Authorization: `Bearer ${ctx.reviewerToken}` });
 const strangerHeaders = () => ({ Authorization: `Bearer ${ctx.strangerToken}` });
 
+// Phase 2C-26: public reads fail closed on unregistered hosts, so the
+// review-list assertions below resolve Company #1 through an explicit
+// RUN-unique test domain (removed in afterAll) instead of ambient
+// localhost state. Company #1 itself stays read-only.
+const PUBLIC_HOST = `${RUN.toLowerCase()}-public.example.test`;
+let publicDomainId = null;
+
 async function registerCustomer(firstName) {
   const email = `${RUN.toLowerCase()}-${firstName.toLowerCase()}@example.test`;
   const registered = await request(app)
     .post("/api/v1/auth/register")
     .send({ email, password: "TestPass123!", firstName, lastName: "Tester", phone: "9999999999" });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   return loggedIn.body.data.accessToken;
@@ -92,9 +102,17 @@ beforeAll(async () => {
   });
   expect(order.status).toBe(201);
   ctx.orderItemId = order.body.data.order.items[0].id;
+
+  const publicDomain = await prisma.companyDomain.create({
+    data: { companyId: COMPANY_ONE_ID, domain: PUBLIC_HOST, isPrimary: false, isActive: true },
+  });
+  publicDomainId = publicDomain.id;
 }, 90000);
 
 afterAll(async () => {
+  if (publicDomainId) {
+    await prisma.companyDomain.deleteMany({ where: { id: publicDomainId } });
+  }
   try {
     if (ctx.reviewId) {
       await request(app).delete(`/api/v1/reviews/${ctx.reviewId}`).set(reviewerHeaders());
@@ -122,7 +140,7 @@ describe("customer review creation and immediate visibility", () => {
     expect(res.body.data.review.isApproved).toBe(true);
     ctx.reviewId = res.body.data.review.id;
 
-    const listed = await request(app).get(`/api/v1/reviews/product/${ctx.productId}`);
+    const listed = await request(app).get(`/api/v1/reviews/product/${ctx.productId}`).set("Host", PUBLIC_HOST);
     expect(listed.status).toBe(200);
     expect(listed.body.data.some((r) => r.id === ctx.reviewId)).toBe(true);
   });
@@ -176,7 +194,7 @@ describe("customer review creation and immediate visibility", () => {
     expect(remove.status).toBe(404);
 
     // Still visible after the rejected admin mutations.
-    const listed = await request(app).get(`/api/v1/reviews/product/${ctx.productId}`);
+    const listed = await request(app).get(`/api/v1/reviews/product/${ctx.productId}`).set("Host", PUBLIC_HOST);
     expect(listed.body.data.some((r) => r.id === ctx.reviewId)).toBe(true);
   });
 });

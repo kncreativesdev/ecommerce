@@ -50,9 +50,18 @@ function toDecimalString(value) {
   return String(value);
 }
 
-async function getOrderStatusCounts() {
+/**
+ * Phase 2C-2 company scoping: every aggregate below takes the
+ * server-resolved `companyId` and restricts to that company — order
+ * aggregates via the owning user, the inventory snapshot via the
+ * variant's denormalized tenant column (bound parameter, never
+ * interpolated). Prisma groupBy uses the relation filter; raw SQL
+ * joins with a bound company parameter.
+ */
+async function getOrderStatusCounts(companyId) {
   const rows = await prisma.order.groupBy({
     by: ["status"],
+    where: { user: { companyId } },
     _count: { _all: true },
   });
   const counts = {};
@@ -62,24 +71,31 @@ async function getOrderStatusCounts() {
   return counts;
 }
 
-async function getRecognizedRevenueTotal() {
-  const rows = await prisma.$queryRawUnsafe(`
+async function getRecognizedRevenueTotal(companyId) {
+  const rows = await prisma.$queryRawUnsafe(
+    `
     SELECT COALESCE(SUM(${RECOGNIZED_CASE}), 0) AS revenue
     FROM orders o
     ${RECOGNIZED_JOIN}
-  `);
+    JOIN users u ON u.id = o.user_id
+    WHERE u.company_id = ?
+  `,
+    companyId
+  );
   return toDecimalString(rows[0]?.revenue);
 }
 
-async function getPeriodAggregates(from, now) {
+async function getPeriodAggregates(companyId, from, now) {
   const rows = await prisma.$queryRawUnsafe(
     `
     SELECT COUNT(*) AS orders,
       COALESCE(SUM(${RECOGNIZED_CASE}), 0) AS revenue
     FROM orders o
     ${RECOGNIZED_JOIN}
-    WHERE o.created_at >= ? AND o.created_at < ?
+    JOIN users u ON u.id = o.user_id
+    WHERE u.company_id = ? AND o.created_at >= ? AND o.created_at < ?
   `,
+    companyId,
     from,
     now
   );
@@ -102,21 +118,23 @@ async function getPeriodAggregates(from, now) {
  * COMPLETED is terminal (entered only from DELIVERED), so the join on
  * current status plus the history timestamp is both precise and stable.
  */
-async function getCompletedInPeriodCount(from, now) {
+async function getCompletedInPeriodCount(companyId, from, now) {
   const rows = await prisma.$queryRawUnsafe(
     `
     SELECT COUNT(DISTINCT h.order_id) AS completed
     FROM order_status_history h
     JOIN orders o ON o.id = h.order_id AND o.status = 'COMPLETED'
-    WHERE h.status = 'COMPLETED' AND h.created_at >= ? AND h.created_at < ?
+    JOIN users u ON u.id = o.user_id
+    WHERE h.status = 'COMPLETED' AND u.company_id = ? AND h.created_at >= ? AND h.created_at < ?
   `,
+    companyId,
     from,
     now
   );
   return toCount(rows[0]?.completed);
 }
 
-async function getBuckets(granularity, from, frameEnd) {
+async function getBuckets(companyId, granularity, from, frameEnd) {
   const bucketExpression = BUCKET_EXPRESSIONS[granularity];
   if (!bucketExpression) {
     throw new Error(`Unknown bucket granularity: ${granularity}`);
@@ -127,10 +145,12 @@ async function getBuckets(granularity, from, frameEnd) {
       COALESCE(SUM(${RECOGNIZED_CASE}), 0) AS revenue
     FROM orders o
     ${RECOGNIZED_JOIN}
-    WHERE o.created_at >= ? AND o.created_at < ?
+    JOIN users u ON u.id = o.user_id
+    WHERE u.company_id = ? AND o.created_at >= ? AND o.created_at < ?
     GROUP BY bucket
     ORDER BY bucket ASC
   `,
+    companyId,
     from,
     frameEnd
   );
@@ -147,9 +167,17 @@ async function getBuckets(granularity, from, frameEnd) {
  * Out of stock = available (quantity - reservedQuantity) <= 0. Variants
  * with no stock record cannot be purchased, so they count as out of
  * stock and are reported separately as uninitialized.
+ *
+ * Served EXCLUSIVELY on the ADMIN-only operational dashboard (`GET
+ * /dashboard/summary`, which rejects SUPER_ADMIN via
+ * `authorize("ADMIN")`) — a company operator's stock alert, scoped to
+ * the admin's company via the bound parameter above. No SUPER_ADMIN
+ * platform aggregate exists yet; one will be built separately when
+ * platform statistics land.
  */
-async function getInventorySnapshot() {
-  const rows = await prisma.$queryRawUnsafe(`
+async function getInventorySnapshot(companyId) {
+  const rows = await prisma.$queryRawUnsafe(
+    `
     SELECT
       COUNT(*) AS tracked,
       COALESCE(SUM(CASE WHEN i.variant_id IS NULL THEN 1 ELSE 0 END), 0) AS uninitialized,
@@ -157,8 +185,10 @@ async function getInventorySnapshot() {
     FROM product_variants v
     JOIN products p ON p.id = v.product_id AND p.is_active = 1
     LEFT JOIN inventory i ON i.variant_id = v.id
-    WHERE v.is_active = 1
-  `);
+    WHERE v.is_active = 1 AND v.company_id = ?
+  `,
+    companyId
+  );
   const row = rows[0] ?? {};
   const uninitialized = toCount(row.uninitialized);
   const emptyRows = toCount(row.emptyRows);

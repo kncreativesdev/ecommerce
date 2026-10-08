@@ -2,20 +2,24 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 
 import app from "../../src/app.js";
+import { stampUserCompany } from "../helpers/userFixtures.js";
 import {
   authLoginRateLimiter,
   authRefreshRateLimiter,
 } from "../../src/modules/auth/auth.rateLimit.js";
 
 /**
- * Auth refresh regression suite (stateless JWT design):
+ * Auth refresh regression suite (persistent one-time rotation):
  *
  * - normal refresh issues a new access token + rotates the cookie
  * - invalid / missing refresh cookie → 401 AUTH_REFRESH_TOKEN_INVALID
- * - concurrent refreshes with the SAME cookie ALL succeed: refresh tokens
- *   are stateless (signature + expiry + live user check, no server-side
- *   one-time-use store), so there is no rotation race between admin and
- *   storefront tabs sharing the browser cookie jar
+ * - concurrent refreshes with the SAME cookie: EXACTLY ONE succeeds.
+ *   Every refresh token is backed by a server-side session row keyed
+ *   by its `jti`; consumption is a single conditional database update,
+ *   so simultaneous tabs sharing the browser cookie jar serialize in
+ *   the database — the winner rotates, losers get 401 and must retry
+ *   with the fresh cookie (standard rotation discipline; a tab holding
+ *   a stale cookie replays a consumed token).
  * - login and refresh use SEPARATE rate-limiter instances so background
  *   silent refreshes can never consume the manual login budget (the
  *   "Too Many Requests on login after tab refreshes" bug)
@@ -39,6 +43,7 @@ describe("auth refresh lifecycle", () => {
       .post("/api/v1/auth/register")
       .send({ email, password: "TestPass123!", firstName: "Refresh", lastName: "Probe" });
     expect(registered.status).toBe(201);
+    await stampUserCompany(registered.body.data.user.id);
 
     const loggedIn = await request(app)
       .post("/api/v1/auth/login")
@@ -52,9 +57,10 @@ describe("auth refresh lifecycle", () => {
 
   it("normal refresh returns a new access token and rotates the cookie", async () => {
     const email = `${RUN.toLowerCase()}-rotate@example.test`;
-    await request(app)
+    const rotateReg = await request(app)
       .post("/api/v1/auth/register")
       .send({ email, password: "TestPass123!", firstName: "Rotate", lastName: "Probe" });
+    await stampUserCompany(rotateReg.body.data.user.id);
     const loggedIn = await request(app)
       .post("/api/v1/auth/login")
       .send({ email, password: "TestPass123!" });
@@ -93,7 +99,7 @@ describe("auth refresh lifecycle", () => {
     expect(res.body.error.code).toBe("AUTH_REFRESH_TOKEN_INVALID");
   });
 
-  it("concurrent refreshes with the same cookie ALL succeed (no rotation race)", async () => {
+  it("concurrent refreshes with the same cookie: exactly one wins, losers get 401", async () => {
     const email = `${RUN.toLowerCase()}-race@example.test`;
     await request(app)
       .post("/api/v1/auth/register")
@@ -104,15 +110,27 @@ describe("auth refresh lifecycle", () => {
     const cookie = extractRefreshCookie(loggedIn);
 
     // Admin tab + storefront tab refreshing simultaneously (same cookie jar).
+    // The conditional consume is atomic: exactly one request rotates.
     const results = await Promise.all(
       Array.from({ length: 5 }, () =>
         request(app).post("/api/v1/auth/refresh").set("Cookie", cookie)
       )
     );
-    for (const res of results) {
-      expect(res.status).toBe(200);
-      expect(typeof res.body.data.accessToken).toBe("string");
+    const succeeded = results.filter((res) => res.status === 200);
+    const rejected = results.filter((res) => res.status === 401);
+    expect(succeeded).toHaveLength(1);
+    expect(rejected).toHaveLength(4);
+    expect(typeof succeeded[0].body.data.accessToken).toBe("string");
+    for (const res of rejected) {
+      expect(res.body.error.code).toBe("AUTH_REFRESH_TOKEN_INVALID");
     }
+    // The winner's fresh cookie keeps working; the consumed cookie stays dead.
+    const winnerJar = extractRefreshCookie(succeeded[0]);
+    expect(winnerJar).toMatch(/^refresh_token=.+/);
+    const followUp = await request(app).post("/api/v1/auth/refresh").set("Cookie", winnerJar);
+    expect(followUp.status).toBe(200);
+    const replay = await request(app).post("/api/v1/auth/refresh").set("Cookie", cookie);
+    expect(replay.status).toBe(401);
   });
 
   it("expired/tampered access token → 401 and never a 429", async () => {

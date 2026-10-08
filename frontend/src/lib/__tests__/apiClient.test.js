@@ -3,6 +3,7 @@ import {
   ApiError,
   apiGet,
   apiRequest,
+  isCompanySuspendedError,
   isSessionInvalidError,
   setAuthHandler,
 } from '../apiClient.js';
@@ -35,6 +36,26 @@ describe('isSessionInvalidError (logout gate)', () => {
     expect(isSessionInvalidError(new ApiError({ status: 401, code: 'RATE_LIMIT_EXCEEDED' }))).toBe(false);
     expect(isSessionInvalidError(new Error('boom'))).toBe(false);
     expect(isSessionInvalidError(null)).toBe(false);
+  });
+
+  it('never treats COMPANY_SUSPENDED as an AUTH_* session rejection', () => {
+    expect(isSessionInvalidError(new ApiError({ status: 403, code: 'COMPANY_SUSPENDED' }))).toBe(false);
+  });
+});
+
+describe('isCompanySuspendedError (suspension gate)', () => {
+  it('matches only the exact 403 COMPANY_SUSPENDED error', () => {
+    expect(isCompanySuspendedError(new ApiError({ status: 403, code: 'COMPANY_SUSPENDED' }))).toBe(true);
+  });
+
+  it('rejects every near-miss', () => {
+    expect(isCompanySuspendedError(new ApiError({ status: 401, code: 'COMPANY_SUSPENDED' }))).toBe(false);
+    expect(isCompanySuspendedError(new ApiError({ status: 403, code: 'COMPANY_SUSPENDED_EXTRA' }))).toBe(false);
+    expect(isCompanySuspendedError(new ApiError({ status: 403, code: 'AUTH_ACCOUNT_INACTIVE' }))).toBe(false);
+    expect(isCompanySuspendedError(new ApiError({ status: 403, code: 'HTTP_403' }))).toBe(false);
+    expect(isCompanySuspendedError(new ApiError({ status: 500, code: 'COMPANY_SUSPENDED' }))).toBe(false);
+    expect(isCompanySuspendedError(new Error('boom'))).toBe(false);
+    expect(isCompanySuspendedError(null)).toBe(false);
   });
 });
 
@@ -79,6 +100,20 @@ describe('apiClient refresh retry guards', () => {
     await expect(apiGet('/orders')).rejects.toMatchObject({ status: 401 });
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(onAuthFailure).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('401 + suspended refresh (403 COMPANY_SUSPENDED) → session cleared, suspension error propagates', async () => {
+    const { onAuthFailure, refreshSpy } = wire();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: { code: 'AUTH_TOKEN_EXPIRED', message: 'expired' } }, { ok: false, status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ success: false, error: { code: 'COMPANY_SUSPENDED', message: 'Company operations are unavailable while the company is suspended' } }, { ok: false, status: 403 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiGet('/orders')).rejects.toMatchObject({ status: 403, code: 'COMPANY_SUSPENDED' });
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(onAuthFailure).toHaveBeenCalledTimes(1);
+    // The original request is never retried after a definitive suspension.
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

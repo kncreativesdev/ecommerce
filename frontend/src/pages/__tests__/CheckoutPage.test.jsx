@@ -2,12 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { toast } from 'sonner';
 import { CheckoutPage } from '../CheckoutPage.jsx';
 import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useCartStore } from '../../stores/useCartStore.js';
 import { useCheckoutStore } from '../../stores/useCheckoutStore.js';
 import { createOrder } from '../../services/orders.service.js';
 import { createAddress, fetchAddresses } from '../../services/addresses.service.js';
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock('../../services/orders.service.js', () => ({
   createOrder: vi.fn(),
@@ -229,6 +234,49 @@ describe('CheckoutPage review step prominence', () => {
     expect(within(summary).getAllByText(/20\.00/).length).toBeGreaterThanOrEqual(1);
     // Display-only total: 200 − 20 = 180.
     expect(within(section).getAllByText(/180\.00/).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('CheckoutPage company suspension (Phase F1)', () => {
+  async function goToPlaceOrder(user) {
+    renderCheckout();
+    await screen.findByRole('radiogroup', { name: /shipping address/i });
+    await user.click(screen.getByRole('button', { name: /continue to billing/i }));
+    await user.click(screen.getByRole('button', { name: /review order/i }));
+    await user.click(screen.getByRole('button', { name: /place order/i }));
+  }
+
+  it('surfaces the suspension message and stays put — no navigation, no cart touch', async () => {
+    const user = userEvent.setup();
+    createOrder.mockRejectedValue({
+      code: 'COMPANY_SUSPENDED',
+      status: 403,
+      message: 'Company operations are unavailable while the company is suspended',
+    });
+    await goToPlaceOrder(user);
+
+    expect(createOrder).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/currently suspended/i),
+    );
+    // Still on the review step with the pick intact — nothing cleared,
+    // nowhere navigated.
+    expect(screen.getByRole('button', { name: /place order/i })).toBeInTheDocument();
+    expect(useCheckoutStore.getState().shippingAddressId).toBe('a-home');
+    expect(useCartStore.getState().cart.items).toHaveLength(1);
+  });
+
+  it('renders the dedicated suspended state when the address book fails suspended', async () => {
+    fetchAddresses.mockRejectedValue({
+      code: 'COMPANY_SUSPENDED',
+      status: 403,
+      message: 'Company operations are unavailable while the company is suspended',
+    });
+    renderCheckout();
+
+    expect(await screen.findByText('Storefront unavailable')).toBeInTheDocument();
+    expect(screen.getByText(/currently suspended/i)).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: /shipping address/i })).not.toBeInTheDocument();
   });
 });
 

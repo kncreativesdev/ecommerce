@@ -1,6 +1,7 @@
 const { AppError } = require("../../utils/appError");
 const returnsRepository = require("./returns.repository");
 const { toSafeReturnRequest, toSafeAdminReturnRequest } = require("./returns.utils");
+const { resolveActorSnapshot, assertAuditInput } = require("../audit/audit.service");
 
 const ADMIN_DEFAULT_PAGE = 1;
 const ADMIN_DEFAULT_LIMIT = 20;
@@ -24,8 +25,20 @@ function assertReturnEligible(order) {
   }
 }
 
-async function requestReturn(userId, orderId, input) {
-  const order = await returnsRepository.findOrderForReturn(orderId, userId);
+/**
+ * Phase 2C-2 request guard (mirrors the orders service): company-scoped
+ * return operations need the server-resolved companyId.
+ */
+function assertRequestCompany(companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
+  return companyId;
+}
+
+async function requestReturn(userId, companyId, orderId, input) {
+  assertRequestCompany(companyId);
+  const order = await returnsRepository.findOrderForReturn(orderId, userId, companyId);
   if (!order) {
     throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
   }
@@ -37,12 +50,30 @@ async function requestReturn(userId, orderId, input) {
   }
 
   const details = input.details?.trim() ? input.details.trim() : null;
+  // Phase 2C-17: return requests are dispute-relevant administrative
+  // events (the REQUESTED-only workflow has no other actor trail, and
+  // ReturnRequestHistory carries no company scope). Only the
+  // constrained reason enum is recorded — free-text details stay out.
+  // No controller change needed: userId is already the server-side
+  // caller identity.
+  const snapshot = await resolveActorSnapshot(userId);
   const result = await returnsRepository.createReturnTx({
     orderId,
     userId,
     orderNumber: order.orderNumber,
     reason: input.reason,
     details,
+    auditLog: assertAuditInput({
+      actorId: snapshot.id,
+      actorRole: snapshot.role,
+      actorEmail: snapshot.email,
+      companyId,
+      action: "CREATED",
+      resource: "RETURN",
+      resourceId: null,
+      outcome: "SUCCESS",
+      details: { orderId, reason: input.reason },
+    }),
   });
   if (result.outcome === "already-exists") {
     // Lost a concurrent duplicate-creation race: exactly one winner exists.
@@ -51,8 +82,9 @@ async function requestReturn(userId, orderId, input) {
   return toSafeReturnRequest(result.row);
 }
 
-async function getReturn(userId, orderId) {
-  const order = await returnsRepository.findOrderForReturn(orderId, userId);
+async function getReturn(userId, companyId, orderId) {
+  assertRequestCompany(companyId);
+  const order = await returnsRepository.findOrderForReturn(orderId, userId, companyId);
   if (!order) {
     throw new AppError(404, "ORDER_NOT_FOUND", "Order not found");
   }
@@ -60,11 +92,13 @@ async function getReturn(userId, orderId) {
   return row ? toSafeReturnRequest(row) : null;
 }
 
-async function listReturnsAdmin(query) {
+async function listReturnsAdmin(companyId, query) {
+  assertRequestCompany(companyId);
   const page = query.page ?? ADMIN_DEFAULT_PAGE;
   const limit = Math.min(query.limit ?? ADMIN_DEFAULT_LIMIT, ADMIN_MAX_LIMIT);
   const search = query.search ? query.search.trim() : "";
   const { rows, total } = await returnsRepository.findReturnsAdmin({
+    companyId,
     status: query.status ?? null,
     search: search === "" ? null : search,
     skip: (page - 1) * limit,
@@ -81,8 +115,9 @@ async function listReturnsAdmin(query) {
   };
 }
 
-async function getReturnAdmin(id) {
-  const row = await returnsRepository.findReturnByIdAdmin(id);
+async function getReturnAdmin(companyId, id) {
+  assertRequestCompany(companyId);
+  const row = await returnsRepository.findReturnByIdAdmin(id, companyId);
   if (!row) {
     throw new AppError(404, "RETURN_NOT_FOUND", "Return request not found");
   }

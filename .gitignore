@@ -3,6 +3,7 @@
 .env
 .env.*
 !.env.example
+.env.staging
 # Dependencies / build output
 node_modules/
 dist/

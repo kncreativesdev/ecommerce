@@ -196,9 +196,12 @@ placeholder fallback (see API_INTEGRATION § media).
 - `bootstrap()`: one coordinated silent refresh (shared single-flight with
   concurrent 401s — exactly one `/auth/refresh` per page load), then
   `GET /auth/me`. Definitive rejection (`401`/`403` + `AUTH_*`) settles
-  anonymous; transient failure (`429`/`5xx`/network) settles `error` —
-  recoverable via retry, never a false logout, never a cookie destroy.
-  Cart/wishlist bootstrap after auth.
+  anonymous; suspended company (`403 COMPANY_SUSPENDED`, refresh or
+  identity fetch) clears the session and settles `error` carrying the
+  suspension — guards render the dedicated suspended state with retry,
+  never a login redirect; transient failure (`429`/`5xx`/network)
+  settles `error` — recoverable via retry, never a false logout, never
+  a cookie destroy. Cart/wishlist bootstrap after auth.
 - `useRequireAuth` / `<ProtectedRoute>` read store status; show a loading
   gate (not a login flash) while `status === "loading"`, a retry panel
   while `status === "error"`, and redirect to login only when settled
@@ -277,7 +280,9 @@ VITE_SUPPORT_EMAIL=support@example.com                   # PLACEHOLDER
   react-hook-form fields; strip unknown fields from payloads.
 - Code map (subset): `AUTH_EMAIL_ALREADY_EXISTS` → email field;
   `AUTH_INVALID_CREDENTIALS` → form-level; `AUTH_ACCOUNT_INACTIVE` →
-  support message; `WISHLIST_ITEM_EXISTS` → treat as saved;
+  support message; `COMPANY_SUSPENDED` (exact code only, any surface) →
+  dedicated "Storefront unavailable" state/message (`lib/suspension.js`),
+  never the disabled-account or retry copy; `WISHLIST_ITEM_EXISTS` → treat as saved;
   `REVIEW_ALREADY_EXISTS` → link to existing review; `INSUFFICIENT_STOCK` /
   `ORDER_INSUFFICIENT_STOCK` → refresh cart + highlight; `404` on owned
   resources → not-found messaging (missing OR another user's — never

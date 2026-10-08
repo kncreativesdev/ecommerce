@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { OrderDetailPage } from '../OrderDetailPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useOrderStore, ORDER_PAGE_SIZE } from '../../stores/useOrderStore.js';
 import { fetchOrderAdmin } from '../../services/order.service.js';
 
@@ -147,5 +148,16 @@ describe('OrderDetailPage coupon display', () => {
 
     expect(screen.getByText('Discount')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Coupon applied' })).not.toBeInTheDocument();
+  });
+});
+
+describe('OrderDetailPage HEAD status access', () => {
+  it('shows the same transition controls to HEAD (backend authorizes status moves)', async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    fetchOrderAdmin.mockResolvedValue(detailFixture());
+    renderDetail();
+
+    expect(await screen.findByText('ORD-2026-000009')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move order to Order Completed' })).toBeInTheDocument();
   });
 });

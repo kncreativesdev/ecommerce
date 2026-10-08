@@ -225,3 +225,39 @@ export function apiPatch(path, body, options) {
 export function apiDelete(path, options) {
   return apiRequest(path, { ...options, method: 'DELETE' });
 }
+
+/**
+ * Binary/file download (Phase 2C-22 audit CSV export): same envelope
+ * bypass as JSON — the backend answers `text/csv` with a
+ * `Content-Disposition: attachment; filename="..."` header instead of
+ * the JSON envelope, so this helper returns `{ blob, filename }`
+ * rather than parsed data. Auth/401-refresh semantics are identical
+ * (shared `doRequest`): expired sessions refresh-and-retry once, hard
+ * auth rejections surface as `ApiError` with the backend code (e.g.
+ * `AUDIT_EXPORT_TOO_LARGE` stays a throwable 422, never a download).
+ */
+function filenameFromDisposition(header) {
+  if (typeof header !== 'string' || header === '') return null;
+  const quoted = /filename="([^"]+)"/i.exec(header);
+  const raw = quoted ? quoted[1] : null;
+  if (!raw) return null;
+  // Defensive: strip path segments and quoting leftovers even though
+  // the backend generates the name server-side.
+  const base = raw.split(/[\\/]/).pop().replace(/["']/g, '');
+  return base !== '' ? base : null;
+}
+
+export async function apiDownloadCsv(path, options = {}) {
+  const { response } = await doRequest(path, { ...options, method: 'GET' });
+  if (!response.ok) {
+    // Error envelope is still JSON (e.g. 422 AUDIT_EXPORT_TOO_LARGE):
+    // parse it for the code/message, never as a download.
+    throw toApiError(response, await parsePayload(response));
+  }
+  const blob = await response.blob();
+  const filename =
+    typeof response.headers?.get === 'function'
+      ? (filenameFromDisposition(response.headers.get('Content-Disposition')) ?? 'audit-logs.csv')
+      : 'audit-logs.csv';
+  return { blob, filename };
+}

@@ -4,6 +4,8 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { stampUserCompany } from "../helpers/userFixtures.js";
+import { provisionCompanyAdmin } from "../../src/modules/users/users.service.js";
 
 /**
  * Coupon admin audit history (live MySQL):
@@ -35,19 +37,21 @@ async function historyCount(couponId) {
 }
 
 beforeAll(async () => {
-  // Real admin account so actor identity (id + email snapshot) is verifiable.
+  // Provisioned ADMIN of a dedicated test company, so actor identity (id
+  // + email snapshot) is verifiable AND the mounted company boundary
+  // resolves consistently (a Company #1-stamped non-admin ADMIN-role user
+  // would fail the ADMIN consistency check by design).
   const email = `${RUN.toLowerCase()}-admin@example.test`;
-  const registered = await request(app).post("/api/v1/auth/register").send({
+  const company = await prisma.company.create({ data: { name: `${RUN}-audit-co` } });
+  ctx.companyId = company.id;
+  const admin = await provisionCompanyAdmin(company.id, {
     email,
     password: "TestPass123!",
     firstName: "Audit",
     lastName: "Admin",
     phone: "9999999999",
   });
-  expect(registered.status).toBe(201);
-  const adminRole = await prisma.role.findUnique({ where: { name: "ADMIN" } });
-  await prisma.userRole.create({ data: { userId: registered.body.data.user.id, roleId: adminRole.id } });
-  ctx.adminId = registered.body.data.user.id;
+  ctx.adminId = admin.id;
   ctx.adminEmail = email;
   ctx.adminHeaders = { Authorization: `Bearer ${signAccessToken({ id: ctx.adminId, roles: ["ADMIN"] })}` };
 
@@ -59,6 +63,7 @@ beforeAll(async () => {
     phone: "9999999999",
   });
   expect(customer.status).toBe(201);
+  await stampUserCompany(customer.body.data.user.id);
   const loggedIn = await request(app)
     .post("/api/v1/auth/login")
     .send({ email: `${RUN.toLowerCase()}-customer@example.test`, password: "TestPass123!" });
@@ -71,6 +76,16 @@ afterAll(async () => {
   } catch { /* best-effort */ }
   try {
     await prisma.coupon.deleteMany({ where: { code: { startsWith: RUN } } });
+  } catch { /* best-effort */ }
+  try {
+    if (ctx.adminId) {
+      await prisma.user.deleteMany({ where: { id: ctx.adminId } });
+    }
+  } catch { /* best-effort */ }
+  try {
+    if (ctx.companyId) {
+      await prisma.company.deleteMany({ where: { id: ctx.companyId } });
+    }
   } catch { /* best-effort */ }
   await prisma.$disconnect();
 });

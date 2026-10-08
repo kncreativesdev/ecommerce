@@ -43,8 +43,17 @@ const authLoginRateLimiter = buildAuthRateLimiter();
 // refresh). Same window/max — enforced, not bypassed.
 const authRefreshRateLimiter = buildAuthRateLimiter();
 
+// Credential recovery/change (Phase 2C-16): forgot-password, OTP
+// verification, reset completion, and the authenticated change flow
+// share one budget, separate from login AND refresh. Rationale mirrors
+// the split above: recovery traffic (legitimate retries, brute-force
+// probing) must never starve interactive login or silent refresh, and
+// vice versa. OTP guessing itself is additionally bounded per code by
+// the database attempt counter — this limiter is defense in depth.
+const authPasswordResetRateLimiter = buildAuthRateLimiter();
+
 // Backwards-compatible alias: existing imports of `authRateLimiter` keep
 // the login-budget limiter.
 const authRateLimiter = authLoginRateLimiter;
 
-module.exports = { authRateLimiter, authLoginRateLimiter, authRefreshRateLimiter };
+module.exports = { authRateLimiter, authLoginRateLimiter, authRefreshRateLimiter, authPasswordResetRateLimiter };

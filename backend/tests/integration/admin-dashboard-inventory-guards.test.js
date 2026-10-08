@@ -4,6 +4,7 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany } from "../helpers/userFixtures.js";
 
 /**
  * Dashboard/inventory guards + adjustment/order integrity (live MySQL).
@@ -21,7 +22,8 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTDG${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
 
 const ctx = { categoryId: null, productId: null, variants: {}, customerToken: null, addressId: null };
 
@@ -65,6 +67,7 @@ beforeAll(async () => {
     phone: "9999999999",
   });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   ctx.customerToken = loggedIn.body.data.accessToken;

@@ -96,6 +96,11 @@ Refresh-token cookies should use:
 
 Cookie configuration must come from centralized configuration.
 
+Refresh sessions persist server-side (`refresh_sessions`,
+SHA-256 `jti` key — never raw tokens): rotation consumes each
+`jti` exactly once and logout revokes the presented session.
+Session rows carry ownership/lifetime metadata only.
+
 ## 7. HTTP Security
 
 Use:

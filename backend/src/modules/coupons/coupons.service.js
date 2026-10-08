@@ -2,6 +2,7 @@ const { AppError } = require("../../utils/appError");
 const couponsRepository = require("./coupons.repository");
 const cartRepository = require("../cart/cart.repository");
 const { toSafeCoupon, toAuditSnapshot, toSafeCouponHistory, moneyToCents, centsToString } = require("./coupons.utils");
+const { resolveActorSnapshot, assertAuditInput } = require("../audit/audit.service");
 const {
   normalizeCouponCode,
   couponCodeSchema,
@@ -38,13 +39,31 @@ function applyDiscountCap(coupon, amountCents) {
   return amountCents < capCents ? amountCents : capCents;
 }
 
-async function validateCouponForOrder(input, now) {
+/**
+ * Phase 2C-6 request guard (mirrors the orders service): company-scoped
+ * coupon operations need the server-resolved companyId. The global code
+ * lookup stays global (codes remain globally unique); the company match
+ * below is what isolates redemption.
+ */
+function assertRequestCompany(companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
+  return companyId;
+}
+
+async function validateCouponForOrder(input, now, companyId = null) {
   const code = normalizeCouponCode(couponCodeSchema.parse(input.code));
   const lines = couponOrderLinesSchema.parse(input.lines);
   const at = now instanceof Date ? now : new Date();
 
   const coupon = await couponsRepository.findCouponByCode(code);
   if (!coupon) {
+    throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
+  }
+  // A foreign-company code fails exactly like an unknown code — the
+  // caller cannot probe another company's coupon book.
+  if (companyId !== null && companyId !== undefined && coupon.companyId !== companyId) {
     throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
   }
   if (!coupon.isActive) {
@@ -115,18 +134,33 @@ async function consumeCouponUsage(couponId) {
  * checkout will apply if the cart is unchanged at order time; order
  * placement re-validates and consumes usage atomically.
  */
-async function validateCouponForUserCart(userId, code) {
+async function validateCouponForUserCart(userId, companyId, code) {
+  assertRequestCompany(companyId);
   const normalized = normalizeCouponCode(couponCodeSchema.parse(code));
   const cart = await cartRepository.findCartWithItemsByUserId(userId);
   const items = cart ? cart.items : [];
   if (items.length === 0) {
     throw new AppError(422, "ORDER_EMPTY_CART", "Cart is empty");
   }
+  // Phase 2C-8 read gate (mirrors cart display): contaminated lines must
+  // not influence the quote (eligible totals would otherwise expose
+  // foreign prices). Same 404 as unknown ids — no oracle.
+  for (const item of items) {
+    const variant = item.variant;
+    if (
+      !variant ||
+      variant.companyId !== companyId ||
+      !variant.product ||
+      variant.product.companyId !== companyId
+    ) {
+      throw new AppError(404, "PRODUCT_VARIANT_NOT_FOUND", "Product variant not found");
+    }
+  }
   const lines = items.map((item) => ({
     productId: item.variant.productId,
     lineTotal: centsToString(moneyToCents(item.variant.price) * BigInt(item.quantity)),
   }));
-  const quote = await validateCouponForOrder({ code: normalized, lines });
+  const quote = await validateCouponForOrder({ code: normalized, lines }, undefined, companyId);
   // One-time-per-customer rule (checked last so existing coupon error
   // precedence — inactive/expired/limit/minimum — is preserved). Quote-time
   // rejection is advisory; the order transaction re-enforces atomically.
@@ -217,7 +251,12 @@ async function assertUniqueCode(code, excludeId) {
   }
 }
 
-async function normalizeProductIds(productIds) {
+/**
+ * Phase 2C-6 eligibility scoping: restricted products must exist AND
+ * belong to the coupon owner's company. A foreign product id fails
+ * exactly like a missing one (the id is the caller's own input).
+ */
+async function normalizeProductIds(productIds, companyId) {
   if (productIds === undefined) {
     return undefined;
   }
@@ -226,26 +265,33 @@ async function normalizeProductIds(productIds) {
     return [];
   }
   const found = await couponsRepository.findExistingProductIds(unique);
-  if (found.length !== unique.length) {
-    const missing = unique.filter((id) => !found.includes(id));
+  const byId = new Map(found.map((row) => [row.id, row]));
+  const missing = unique.filter((id) => {
+    const row = byId.get(id);
+    return !row || row.companyId !== companyId;
+  });
+  if (missing.length > 0) {
     throw new AppError(404, "PRODUCT_NOT_FOUND", `Referenced product not found: ${missing[0]}`);
   }
   return unique;
 }
 
-async function getCoupon(id) {
-  const row = await couponsRepository.findCouponById(id);
+async function getCoupon(companyId, id) {
+  assertRequestCompany(companyId);
+  const row = await couponsRepository.findCouponById(id, companyId);
   if (!row) {
     throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
   }
   return toSafeCoupon(row);
 }
 
-async function listCouponsAdmin(query) {
+async function listCouponsAdmin(companyId, query) {
+  assertRequestCompany(companyId);
   const page = query.page ?? ADMIN_DEFAULT_PAGE;
   const limit = Math.min(query.limit ?? ADMIN_DEFAULT_LIMIT, ADMIN_MAX_LIMIT);
   const search = query.search ? query.search.trim() : "";
   const { rows, total } = await couponsRepository.findCouponsAdmin({
+    companyId,
     status: query.status ?? "all",
     search: search === "" ? null : search,
     skip: (page - 1) * limit,
@@ -263,6 +309,30 @@ async function listCouponsAdmin(query) {
 }
 
 /**
+ * Phase 2C-17 AuditLog event for coupon administration. CouponHistory
+ * keeps the full domain record (including the code); the cross-resource
+ * AuditLog carries only non-bearer fields — the code itself is never
+ * written there (changed-field NAMES are safe to name, values are not).
+ */
+async function snapshotActor(actor) {
+  return actor && actor.id ? resolveActorSnapshot(actor.id) : null;
+}
+
+function couponEvent(snapshot, companyId, action, resourceId, details) {
+  return assertAuditInput({
+    actorId: snapshot ? snapshot.id : null,
+    actorRole: snapshot ? snapshot.role : "SYSTEM",
+    actorEmail: snapshot ? snapshot.email : null,
+    companyId,
+    action,
+    resource: "COUPON",
+    resourceId,
+    outcome: "SUCCESS",
+    details: details ?? null,
+  });
+}
+
+/**
  * Diff two audit snapshots (stable normalized shapes): returns
  * `{ field: { before, after } }` for actually-changed fields only.
  */
@@ -276,7 +346,8 @@ function diffAuditSnapshots(before, after) {
   return changes;
 }
 
-async function createCoupon(input, actor) {
+async function createCoupon(companyId, input, actor) {
+  assertRequestCompany(companyId);
   const code = normalizeCouponCode(couponCodeSchema.parse(input.code));
   if (code === "") {
     throw new AppError(422, "VALIDATION_ERROR", "Coupon code must not be empty");
@@ -296,10 +367,11 @@ async function createCoupon(input, actor) {
   const startsAt = parseDateTimeInput(input.startsAt ?? null, "startsAt");
   const expiresAt = parseDateTimeInput(input.expiresAt ?? null, "expiresAt");
   assertDateOrder(startsAt, expiresAt);
-  const productIds = await normalizeProductIds(input.productIds);
+  const productIds = await normalizeProductIds(input.productIds, companyId);
 
   const data = {
     code,
+    companyId,
     description: input.description ?? null,
     discountType: input.discountType,
     discountValue,
@@ -326,12 +398,21 @@ async function createCoupon(input, actor) {
   };
 
   try {
-    const id = await couponsRepository.createCouponRecord(data, productIds, {
-      actorId: actor ? actor.id : null,
-      action: "CREATED",
-      metadata: { snapshot },
-    });
-    return getCoupon(id);
+    const id = await couponsRepository.createCouponRecord(
+      data,
+      productIds,
+      {
+        actorId: actor ? actor.id : null,
+        action: "CREATED",
+        metadata: { snapshot },
+      },
+      couponEvent(await snapshotActor(actor), companyId, "CREATED", null, {
+        discountType: data.discountType,
+        discountValue: data.discountValue,
+        isActive: data.isActive ?? true,
+      })
+    );
+    return getCoupon(companyId, id);
   } catch (err) {
     if (isCouponCodeConflict(err)) {
       throw new AppError(409, "COUPON_CODE_EXISTS", "A coupon with this code already exists");
@@ -340,11 +421,12 @@ async function createCoupon(input, actor) {
   }
 }
 
-async function updateCoupon(id, input, actor) {
+async function updateCoupon(companyId, id, input, actor) {
+  assertRequestCompany(companyId);
   if (!input || Object.keys(input).length === 0) {
     throw new AppError(422, "COUPON_UPDATE_INVALID", "No updatable fields provided");
   }
-  const current = await couponsRepository.findCouponById(id);
+  const current = await couponsRepository.findCouponById(id, companyId);
   if (!current) {
     throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
   }
@@ -419,7 +501,7 @@ async function updateCoupon(id, input, actor) {
     }
   }
 
-  const productIds = await normalizeProductIds(input.productIds);
+  const productIds = await normalizeProductIds(input.productIds, companyId);
 
   // Audit diff from persisted before/after state (never trusts the frontend
   // to describe the change). An isActive transition classifies the event as
@@ -439,16 +521,23 @@ async function updateCoupon(id, input, actor) {
   }
   const changes = diffAuditSnapshots(before, after);
   let audit = null;
+  let auditLog = null;
   if (Object.keys(changes).length > 0) {
     let action = "UPDATED";
     if (changes.isActive) {
       action = changes.isActive.after === false ? "DEACTIVATED" : "REACTIVATED";
     }
     audit = { actorId: actor ? actor.id : null, action, metadata: { changes } };
+    // AuditLog names changed fields only (comma-joined — metadata
+    // values must stay scalar for the secret scanner); code VALUES
+    // stay in CouponHistory alone.
+    auditLog = couponEvent(await snapshotActor(actor), companyId, action, id, {
+      fields: Object.keys(changes).sort().join(","),
+    });
   }
 
   try {
-    const result = await couponsRepository.updateCouponRecord(id, data, productIds, audit);
+    const result = await couponsRepository.updateCouponRecord(id, data, productIds, audit, auditLog);
     if (result.outcome === "missing") {
       throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
     }
@@ -461,14 +550,24 @@ async function updateCoupon(id, input, actor) {
     }
     throw err;
   }
-  return getCoupon(id);
+  return getCoupon(companyId, id);
 }
 
-async function deleteCoupon(id, actor) {
-  const result = await couponsRepository.deleteCouponRecord(id, {
-    actorId: actor ? actor.id : null,
-    action: "DELETED",
-  });
+async function deleteCoupon(companyId, id, actor) {
+  assertRequestCompany(companyId);
+  // Scoped pre-read first: a foreign coupon reads as missing, so the
+  // lifecycle-guarded delete below can never touch another company.
+  // Coupon company is immutable (no reassignment path), so the check
+  // cannot race the in-transaction delete.
+  await getCoupon(companyId, id);
+  const result = await couponsRepository.deleteCouponRecord(
+    id,
+    {
+      actorId: actor ? actor.id : null,
+      action: "DELETED",
+    },
+    couponEvent(await snapshotActor(actor), companyId, "DELETED", id, null)
+  );
   if (result.outcome === "missing") {
     throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
   }
@@ -482,8 +581,9 @@ async function deleteCoupon(id, actor) {
   return { id };
 }
 
-async function listCouponHistory(id, query) {
-  const existing = await couponsRepository.findCouponById(id);
+async function listCouponHistory(companyId, id, query) {
+  assertRequestCompany(companyId);
+  const existing = await couponsRepository.findCouponById(id, companyId);
   if (!existing) {
     throw new AppError(404, "COUPON_NOT_FOUND", "Coupon not found");
   }

@@ -5,8 +5,11 @@ import { env } from '../config/env.js';
  * Admin product-media API access — DOCUMENTED endpoints only (verified:
  * `media.routes|controller|service|validation`, mergeParams router):
  *
- * - `GET /products/:productId/images` (public) → bare array of image
- *   metadata. `404 PRODUCT_NOT_FOUND` when the product is missing/inactive.
+ * - `GET /products/:productId/images/admin` (ADMIN/HEAD/MEMBER, identity
+ *   company) → bare array of image metadata. Company-scoped operational
+ *   reads — never the public Host-based `GET /products/:productId/images`
+ *   (that serves the storefront company). `404 PRODUCT_NOT_FOUND` when the
+ *   product is missing/inactive in the caller's company.
  * - `POST /products/:productId/images` (ADMIN, multipart) → `201 { image }`.
  *   Single file in field `image`; JPEG/PNG/WebP (mime + extension), ≤5MB
  *   (`413 MEDIA_FILE_TOO_LARGE`), dimensions ≤8000px, stored as WebP.
@@ -31,7 +34,7 @@ export const MEDIA_ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'
 export const MEDIA_ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
 
 export function fetchProductImages(productId) {
-  return apiGet(`/products/${productId}/images`).then((data) =>
+  return apiGet(`/products/${productId}/images/admin`).then((data) =>
     Array.isArray(data) ? data : [],
   );
 }

@@ -1,8 +1,11 @@
 import { apiGet, apiGetPage, apiPatch } from '../lib/apiClient.js';
 
 /**
- * Admin customer API access — ADMIN-only user endpoints (verified:
+ * Admin customer API access — company user endpoints (verified:
  * `users.routes|controller|service|validation`, API_CONTRACT_MATRIX §2).
+ * The backend serves ADMIN (full company scope) and HEAD
+ * (MEMBER-only scope); this Customers UI itself stays ADMIN-gated
+ * (see `routes/router.jsx`), so HEAD callers never reach it.
  * Every query param below is backend-supported
  * (`adminUserListQuerySchema` allowlist:
  * page/limit/search/isActive/sortBy/sortOrder). No invented params.
@@ -14,14 +17,17 @@ import { apiGet, apiGetPage, apiPatch } from '../lib/apiClient.js';
  *   Defaults: page 1, limit 20 (max 100), newest first. Rows carry safe
  *   fields only (`id, email, firstName, lastName, phone, isActive,
  *   roles[], createdAt, updatedAt`) — never password hashes or tokens.
- *   There is deliberately NO user-deletion, password, address, or
- *   creation endpoint: account lifecycle is activate/deactivate only,
- *   and addresses stay owner-scoped with no admin override.
+ *   Staff creation lives on `POST /users` and managed profile edits on
+ *   `PATCH /users/:id/profile` (HEAD: MEMBER targets only — not used
+ *   by this UI). There is deliberately NO user-deletion, password, or
+ *   address endpoint, and addresses stay owner-scoped with no admin
+ *   override.
  * - `GET /users/:id` → `200 { user }` (same safe shape). Unknown ids →
  *   `404 USER_NOT_FOUND`.
  * - `PATCH /users/:id { isActive }` → `200 { user }`. Deactivation blocks
  *   the account at login/refresh (`403 AUTH_ACCOUNT_INACTIVE`);
- *   reactivation restores it. No other profile field is admin-writable.
+ *   reactivation restores it. Self-deactivation is rejected
+ *   (`409 USER_SELF_DEACTIVATION`).
  */
 export function fetchCustomers({
   page = 1,

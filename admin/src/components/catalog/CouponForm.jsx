@@ -5,6 +5,7 @@ import { Button } from '../ui/Button.jsx';
 import { Checkbox, Field, Input, Select, Textarea } from '../ui/Field.jsx';
 import { applyServerErrors } from '../../utils/serverErrors.js';
 import { DISCOUNT_TYPES, couponProductIds, fromLocalInputValue, toLocalInputValue } from '../../utils/coupons.js';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 
 /**
  * Reusable coupon form (create + edit). Editable fields mirror the backend
@@ -80,6 +81,9 @@ const couponFormSchema = z
 
 export function CouponForm({ initialValue = null, products = [], productsLoading = false, onSubmit, submitting = false }) {
   const isEdit = Boolean(initialValue?.id);
+  // Active toggle is ADMIN-only (backend 403s HEAD there); hidden toggle
+  // submits the default/existing active value.
+  const isAdmin = useAuthStore((state) => state.isAdmin());
   const initialProductIds = isEdit ? couponProductIds(initialValue) : [];
 
   const {
@@ -242,7 +246,9 @@ export function CouponForm({ initialValue = null, products = [], productsLoading
         )}
       </Field>
 
-      <Checkbox label="Active (available for validation)" {...register('isActive')} />
+      {isAdmin ? (
+        <Checkbox label="Active (available for validation)" {...register('isActive')} />
+      ) : null}
 
       {errors.root?.message ? (
         <p role="alert" className="text-sm font-medium text-destructive">

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronRight, PackageSearch } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTaxonomy } from '../hooks/useTaxonomy.js';
+import { useAuthStore } from '../stores/useAuthStore.js';
 import { useProductStore } from '../stores/useProductStore.js';
 import { fetchProductById } from '../services/product.service.js';
 import { buildUpdateProductPayload } from '../utils/productPayload.js';
@@ -15,17 +16,22 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 
 /**
  * Edit Product (`/catalog/products/:id/edit`). Loads the documented
- * `GET /products/:id` directly (deep-link safe, independent of list
+ * `GET /products/admin/:id` directly (deep-link safe, independent of list
  * state), then submits `PATCH /products/:id` via the payload adapter.
  * Detail is read with the admin `?status=all` scope so deactivated
  * products stay editable and reactivatable (via the form's Active
- * checkbox). Product fields via `ProductForm`; variants via
+ * checkbox); HEAD/MEMBER callers use the active scope instead (backend
+ * 403s other scopes — inactive rows stay out of HEAD/MEMBER reach by
+ * design; MEMBER additionally omits `isActive` from the PATCH body).
+ * Product fields via `ProductForm`; variants via
  * `VariantManager` (dedicated variant endpoints) below.
  */
 export function ProductEditPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { categories } = useTaxonomy();
+  const isAdmin = useAuthStore((state) => state.isAdmin());
+  const detailScope = isAdmin ? 'all' : 'active';
   const updateProduct = useProductStore((state) => state.updateProduct);
   const syncProduct = useProductStore((state) => state.syncProduct);
   const [product, setProduct] = useState(null);
@@ -47,7 +53,7 @@ export function ProductEditPage() {
   useEffect(() => {
     document.title = 'Edit Product — Tech Pulse Admin';
     let cancelled = false;
-    fetchProductById(id, 'all')
+    fetchProductById(id, detailScope)
       .then((record) => {
         if (cancelled) return;
         if (!record) {
@@ -70,7 +76,7 @@ export function ProductEditPage() {
     return () => {
       cancelled = true;
     };
-  }, [id, reloadToken]);
+  }, [id, reloadToken, detailScope]);
 
   const reload = () => {
     setError(null);
@@ -79,9 +85,9 @@ export function ProductEditPage() {
   };
 
   // Silent refresh after variant mutations (no skeleton flash): refetch the
-  // product detail and sync the list mirror (admin scope — inactive-safe).
+  // product detail and sync the list mirror (role scope — inactive-safe).
   const refreshProduct = async () => {
-    const record = await fetchProductById(id, 'all');
+    const record = await fetchProductById(id, detailScope);
     if (record) {
       setProduct(record);
       syncProduct(record);
@@ -162,3 +168,4 @@ export function ProductEditPage() {
     </div>
   );
 }
+

@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { InventoryPage } from '../InventoryPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useInventoryStore } from '../../stores/useInventoryStore.js';
 import {
   adjustInventory,
@@ -404,5 +405,22 @@ describe('InventoryPage header refresh', () => {
 
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(fetchInventoryList).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('InventoryPage HEAD stock access', () => {
+  it('adjusts stock by delta for HEAD through the same controls', async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    fetchInventoryList.mockResolvedValue({
+      items: [itemFixture()],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    });
+    adjustInventory.mockResolvedValue({ ...itemFixture().inventory, quantity: 13 });
+    renderPage();
+    await screen.findByText('GAD-BLK');
+
+    await user.click(screen.getByRole('button', { name: 'Adjust stock for GAD-BLK' }));
+    expect(screen.getByRole('button', { name: 'Apply adjustment' })).toBeInTheDocument();
   });
 });

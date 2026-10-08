@@ -1,5 +1,6 @@
 const { prisma } = require("../../config/database");
 const { AppError } = require("../../utils/appError");
+const auditRepository = require("../audit/audit.repository");
 
 const VARIANT_SELECT = {
   id: true,
@@ -11,6 +12,9 @@ const VARIANT_SELECT = {
   barcode: true,
   weight: true,
   isActive: true,
+  // Tenant ownership for Phase 2C-1 catalog/cart/checkout enforcement.
+  // Selected, never serialized (safe mappers pick explicit fields).
+  companyId: true,
   createdAt: true,
   updatedAt: true,
 };
@@ -36,6 +40,7 @@ function productShape(activeVariantsOnly) {
     brand: true,
     isActive: true,
     isFeatured: true,
+    companyId: true,
     createdAt: true,
     updatedAt: true,
     category: { select: CATEGORY_BRIEF_SELECT },
@@ -52,9 +57,16 @@ function productShape(activeVariantsOnly) {
   };
 }
 
-async function findActiveProducts() {
+/**
+ * Phase 2C-4 company scoping: `companyId` null means unscoped (public
+ * catalog reads pass null and behave exactly as before); non-null
+ * restricts to the company. These list/detail queries contain no OR
+ * search conditions, so the predicate can never be escaped by filter
+ * logic.
+ */
+async function findActiveProducts(companyId = null) {
   return prisma.product.findMany({
-    where: { isActive: true },
+    where: { isActive: true, ...(companyId ? { companyId } : {}) },
     orderBy: { createdAt: "asc" },
     select: productShape(true),
   });
@@ -66,33 +78,33 @@ async function findActiveProducts() {
  * `inactive` → inactive only, `all` → everything. Non-active scopes embed
  * ALL variants so the admin sees the complete record.
  */
-async function findProductsByStatus(status) {
+async function findProductsByStatus(status, companyId = null) {
   if (status === "active") {
-    return findActiveProducts();
+    return findActiveProducts(companyId);
   }
   const where = status === "all" ? {} : { isActive: false };
   return prisma.product.findMany({
-    where,
+    where: { ...where, ...(companyId ? { companyId } : {}) },
     orderBy: { createdAt: "asc" },
     select: productShape(false),
   });
 }
 
-async function findActiveProductById(id) {
+async function findActiveProductById(id, companyId = null) {
   return prisma.product.findFirst({
-    where: { id, isActive: true },
+    where: { id, isActive: true, ...(companyId ? { companyId } : {}) },
     select: productShape(true),
   });
 }
 
-async function findProductById(id) {
-  return prisma.product.findUnique({
-    where: { id },
+async function findProductById(id, companyId = null) {
+  return prisma.product.findFirst({
+    where: { id, ...(companyId ? { companyId } : {}) },
     select: productShape(false),
   });
 }
 
-async function createProductWithVariants(productData, variantsData) {
+async function createProductWithVariants(productData, variantsData, audit = null) {
   return prisma.$transaction(async (tx) => {
     const product = await tx.product.create({
       data: productData,
@@ -101,6 +113,11 @@ async function createProductWithVariants(productData, variantsData) {
       await tx.productVariant.create({
         data: { ...variantData, productId: product.id },
       });
+    }
+    // Phase 2C-17: the pre-validated creation audit commits with the
+    // rows it describes — the repository stamps the created id.
+    if (audit) {
+      await auditRepository.createAuditEvent({ ...audit, resourceId: product.id }, tx);
     }
     return tx.product.findUniqueOrThrow({
       where: { id: product.id },
@@ -136,20 +153,28 @@ async function deactivateProduct(id) {
  * reviews, payments, and notifications are never touched here; order
  * status is the source of truth and order items are never mutated.
  */
-async function deactivateProductGuarded(id, inProcessStatuses) {
+async function deactivateProductGuarded(id, companyId, inProcessStatuses, audit = null) {
   return prisma.$transaction(async (tx) => {
     const product = await tx.product.findUnique({
       where: { id },
-      select: { id: true, name: true, isActive: true },
+      select: { id: true, name: true, isActive: true, companyId: true },
     });
-    if (!product) {
+    // Same-transaction company gate: a cross-company product reads as
+    // missing, so the eligibility check and the state change below can
+    // never diverge across companies.
+    if (!product || product.companyId !== companyId) {
       throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
     }
     if (!product.isActive) {
-      return tx.product.findUniqueOrThrow({
-        where: { id },
-        select: productShape(false),
-      });
+      return {
+        row: await tx.product.findUniqueOrThrow({
+          where: { id },
+          select: productShape(false),
+        }),
+        // No transition happened (raced deactivation): the caller must
+        // not record a DEACTIVATED audit for a no-op.
+        transitioned: false,
+      };
     }
     const blockingWhere = {
       productId: id,
@@ -183,17 +208,23 @@ async function deactivateProductGuarded(id, inProcessStatuses) {
         { blockingOrderCount: grouped.length, blockingOrders }
       );
     }
-    return tx.product.update({
+    const row = await tx.product.update({
       where: { id },
       data: { isActive: false },
       select: productShape(false),
     });
+    // Phase 2C-17: the pre-validated deactivation audit commits with
+    // the transition it describes.
+    if (audit) {
+      await auditRepository.createAuditEvent({ ...audit, resourceId: row.id }, tx);
+    }
+    return { row, transitioned: true };
   });
 }
 
-async function findVariantByIdAndProductId(variantId, productId) {
+async function findVariantByIdAndProductId(variantId, productId, companyId = null) {
   return prisma.productVariant.findFirst({
-    where: { id: variantId, productId },
+    where: { id: variantId, productId, ...(companyId ? { companyId } : {}) },
     select: VARIANT_SELECT,
   });
 }

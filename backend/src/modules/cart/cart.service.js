@@ -13,6 +13,23 @@ function assertVariantPurchasable(variant) {
   return variant;
 }
 
+/**
+ * Phase 2C-1 tenant check: the variant (and its parent product, as
+ * defense against ownership drift) must belong to the authenticated
+ * user's company. Cross-company ids fail with the same 404 as unknown
+ * ids so callers cannot probe another company's catalog. A missing
+ * companyId fails closed (platform contexts have no cart operations).
+ */
+function assertSameCompany(variant, companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
+  if (!variant || variant.companyId !== companyId || !variant.product || variant.product.companyId !== companyId) {
+    throw new AppError(404, "PRODUCT_VARIANT_NOT_FOUND", "Product variant not found");
+  }
+  return variant;
+}
+
 function assertAvailableStock(variant, requestedQuantity) {
   // Backend inventory is authoritative. A variant with no inventory record
   // cannot be purchased (uninitialized stock counts as out of stock in the
@@ -28,23 +45,53 @@ function assertAvailableStock(variant, requestedQuantity) {
   }
 }
 
-async function readSafeCart(userId) {
+/**
+ * Phase 2C-8 read gate: every rendered line's variant AND product must
+ * belong to the reader's company. Mutation paths (2C-1) already refuse
+ * foreign variants at write time and checkout refuses them
+ * transactionally, but a contaminated line (pre-enforcement legacy,
+ * direct writes, or null-company catalog) must never RENDER foreign
+ * product/variant/image/price/stock data — the whole read fails closed
+ * with the same 404 as unknown ids instead of returning mixed-company
+ * cart data. Nothing is repaired or reassigned here.
+ */
+function assertCartCompany(cart, companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
+  for (const item of cart.items || []) {
+    const variant = item.variant;
+    if (
+      !variant ||
+      variant.companyId !== companyId ||
+      !variant.product ||
+      variant.product.companyId !== companyId
+    ) {
+      throw new AppError(404, "PRODUCT_VARIANT_NOT_FOUND", "Product variant not found");
+    }
+  }
+  return cart;
+}
+
+async function readSafeCart(userId, companyId) {
   const cart = await cartRepository.findCartWithItemsByUserId(userId);
   if (!cart) {
     throw new AppError(404, "CART_NOT_FOUND", "Cart not found");
   }
-  return toSafeCart(cart);
+  return toSafeCart(assertCartCompany(cart, companyId));
 }
 
-async function getCart(userId) {
+async function getCart(userId, companyId) {
   await cartRepository.ensureCartByUserId(userId);
-  return readSafeCart(userId);
+  return readSafeCart(userId, companyId);
 }
 
-async function addItem(userId, input) {
+async function addItem(userId, companyId, input) {
   const cart = await cartRepository.ensureCartByUserId(userId);
 
-  const variant = assertVariantPurchasable(await cartRepository.findVariantForCart(input.variantId));
+  const variant = assertVariantPurchasable(
+    assertSameCompany(await cartRepository.findVariantForCart(input.variantId), companyId)
+  );
 
   const current = await cartRepository.findCartWithItemsByUserId(userId);
   const existingItem = (current ? current.items : []).find((item) => item.variantId === input.variantId);
@@ -57,10 +104,10 @@ async function addItem(userId, input) {
   assertAvailableStock(variant, requestedTotal);
 
   await cartRepository.upsertCartItemIncrement(cart.id, input.variantId, input.quantity);
-  return readSafeCart(userId);
+  return readSafeCart(userId, companyId);
 }
 
-async function updateItem(userId, itemId, input) {
+async function updateItem(userId, companyId, itemId, input) {
   const cart = await cartRepository.ensureCartByUserId(userId);
 
   const item = await cartRepository.findCartItemByIdAndCartId(itemId, cart.id);
@@ -68,24 +115,26 @@ async function updateItem(userId, itemId, input) {
     throw new AppError(404, "CART_ITEM_NOT_FOUND", "Cart item not found");
   }
 
-  const variant = assertVariantPurchasable(await cartRepository.findVariantForCart(item.variantId));
+  const variant = assertVariantPurchasable(
+    assertSameCompany(await cartRepository.findVariantForCart(item.variantId), companyId)
+  );
   assertAvailableStock(variant, input.quantity);
 
   const updated = await cartRepository.updateCartItemQuantityByIdAndCartId(itemId, cart.id, input.quantity);
   if (updated === 0) {
     throw new AppError(404, "CART_ITEM_NOT_FOUND", "Cart item not found");
   }
-  return readSafeCart(userId);
+  return readSafeCart(userId, companyId);
 }
 
-async function removeItem(userId, itemId) {
+async function removeItem(userId, companyId, itemId) {
   const cart = await cartRepository.ensureCartByUserId(userId);
 
   const deleted = await cartRepository.deleteCartItemByIdAndCartId(itemId, cart.id);
   if (deleted === 0) {
     throw new AppError(404, "CART_ITEM_NOT_FOUND", "Cart item not found");
   }
-  return readSafeCart(userId);
+  return readSafeCart(userId, companyId);
 }
 
 module.exports = { getCart, addItem, updateItem, removeItem };

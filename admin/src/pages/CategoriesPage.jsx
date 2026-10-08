@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pencil, Plus, Power, RotateCcw, Search, Tags, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTaxonomy } from '../hooks/useTaxonomy.js';
+import { useAuthStore } from '../stores/useAuthStore.js';
 import { useCategoryStore } from '../stores/useCategoryStore.js';
 import { deleteCategoryImage, uploadCategoryImage } from '../services/category.service.js';
 import { buildCategoryTree } from '../utils/taxonomy.js';
@@ -22,6 +23,8 @@ import { cn } from '../lib/cn.js';
  *
  * - Status filter (All/Active/Inactive) via the admin-safe `?status=`
  *   filter — deactivated rows stay discoverable and reactivatable.
+ *   ADMIN-only: HEAD works the active scope (backend 403s other
+ *   scopes), so the filter is hidden for non-ADMIN callers.
  * - Client-side name/slug search over the scoped mirror.
  * - Create / edit via `CategoryForm` modal (strict documented payloads).
  * - Deactivate via confirm modal → documented soft-deactivate (`DELETE`).
@@ -37,6 +40,11 @@ const SCOPES = [
 
 export function CategoriesPage() {
   const { categories, isLoading, error, scope, setScope, refreshCategories } = useTaxonomy();
+  const isAdmin = useAuthStore((state) => state.isAdmin());
+  // MEMBER holds category CREATE/READ/UPDATE only (no DEACTIVATE grant):
+  // create/edit stay, deactivate/reactivate hide. HEAD keeps lifecycle.
+  const isMember = useAuthStore((state) => state.isMember());
+  const canLifecycleCategory = !isMember;
   const createCategory = useCategoryStore((state) => state.createCategory);
   const updateCategory = useCategoryStore((state) => state.updateCategory);
   const deactivateCategory = useCategoryStore((state) => state.deactivateCategory);
@@ -177,6 +185,7 @@ export function CategoriesPage() {
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        {isAdmin ? (
         <div role="group" aria-label="Category status filter" className="inline-flex rounded-lg border border-border bg-surface p-1">
           {SCOPES.map((option) => (
             <button
@@ -196,6 +205,7 @@ export function CategoriesPage() {
             </button>
           ))}
         </div>
+        ) : null}
         <div role="search" className="relative w-full sm:max-w-xs">
           <label htmlFor="category-search" className="sr-only">
             Search categories
@@ -267,6 +277,7 @@ export function CategoriesPage() {
                   category={root}
                   depth={0}
                   activatingId={activatingId}
+                  canLifecycle={canLifecycleCategory}
                   onEdit={(target) => setFormState({ mode: 'edit', category: target })}
                   onDeactivate={setDeactivating}
                   onActivate={handleActivate}
@@ -274,10 +285,12 @@ export function CategoriesPage() {
               ))}
             </ul>
           </div>
+          {canLifecycleCategory ? (
           <p className="text-xs leading-5 text-muted-foreground">
             Deactivating hides a category from the storefront but keeps the record —
             switch the filter to Inactive to review and reactivate it.
           </p>
+          ) : null}
         </>
       )}
 
@@ -325,7 +338,7 @@ export function CategoriesPage() {
   );
 }
 
-function CategoryRow({ category, depth, activatingId, onEdit, onDeactivate, onActivate }) {
+function CategoryRow({ category, depth, activatingId, canLifecycle = true, onEdit, onDeactivate, onActivate }) {
   const children = category.children ?? [];
   const isActivating = activatingId === category.id;
   return (
@@ -359,7 +372,8 @@ function CategoryRow({ category, depth, activatingId, onEdit, onDeactivate, onAc
         >
           <Pencil size={17} aria-hidden="true" />
         </button>
-        {category.isActive ? (
+        {canLifecycle ? (
+          category.isActive ? (
           <button
             type="button"
             onClick={() => onDeactivate(category)}
@@ -380,7 +394,8 @@ function CategoryRow({ category, depth, activatingId, onEdit, onDeactivate, onAc
           >
             <RotateCcw size={17} aria-hidden="true" />
           </button>
-        )}
+          )
+        ) : null}
       </div>
       {children.length > 0 ? (
         <ul>
@@ -390,6 +405,7 @@ function CategoryRow({ category, depth, activatingId, onEdit, onDeactivate, onAc
               category={child}
               depth={depth + 1}
               activatingId={activatingId}
+              canLifecycle={canLifecycle}
               onEdit={onEdit}
               onDeactivate={onDeactivate}
               onActivate={onActivate}

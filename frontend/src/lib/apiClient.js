@@ -12,8 +12,9 @@ import { env } from '../config/env.js';
  *   → throw typed `ApiError { status, code, message, details }`.
  * - `401` handling: single-flight silent refresh → retry original once →
  *   else clear session. Never loops, never logs tokens. Only an explicit
- *   auth rejection (`401`/`403` + `AUTH_*`) clears the session — `429`,
- *   `5xx`, and network failures propagate WITHOUT signing out.
+ *   auth rejection (`401`/`403` + `AUTH_*`) or a suspended company
+ *   (`403 COMPANY_SUSPENDED`) clears the session — `429`, `5xx`, and
+ *   network failures propagate WITHOUT signing out.
  *
  * The auth store wires itself via `setAuthHandler` (dependency inversion —
  * this module never imports the store, so no import cycle exists).
@@ -96,6 +97,16 @@ export function isSessionInvalidError(error) {
   return typeof error.code === 'string' && error.code.startsWith('AUTH_');
 }
 
+/**
+ * Company-suspension predicate (Phase F1). `403 COMPANY_SUSPENDED` is
+ * definitive like an auth rejection — no session can operate while the
+ * company is suspended — but it is NOT an `AUTH_*` code, so it must be
+ * matched exactly (never by status alone, never by prefix).
+ */
+export function isCompanySuspendedError(error) {
+  return error instanceof ApiError && error.status === 403 && error.code === 'COMPANY_SUSPENDED';
+}
+
 async function doFetch(path, { method = 'GET', body, headers, credentials } = {}) {
   const base = env.apiUrl;
   if (!base) {
@@ -172,6 +183,14 @@ export async function apiRequest(path, options = {}) {
     if (isSessionInvalidError(refreshError)) {
       authHandler.onAuthFailure();
       throw toApiError(response, payload);
+    }
+    if (isCompanySuspendedError(refreshError)) {
+      // Definitive like an auth rejection: while suspended, no session
+      // can operate, so clear mirrors the same way. The suspension error
+      // itself propagates (not the stale 401) so callers can branch on
+      // its code and render the suspended state instead of retrying.
+      authHandler.onAuthFailure();
+      throw refreshError;
     }
     throw refreshError;
   }

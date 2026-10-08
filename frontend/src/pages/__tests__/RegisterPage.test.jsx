@@ -44,6 +44,29 @@ describe('RegisterPage password visibility', () => {
   });
 });
 
+describe('RegisterPage company suspension (Phase F1)', () => {
+  it('shows the dedicated suspension message for 403 COMPANY_SUSPENDED', async () => {
+    const user = userEvent.setup();
+    const registerThenLogin = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { code: 'COMPANY_SUSPENDED', status: 403, message: 'Company operations are unavailable while the company is suspended' },
+    });
+    useAuthStore.mockImplementation((selector) => selector({
+      registerThenLogin,
+      accessToken: null,
+      status: 'ready',
+    }));
+    renderRegister();
+    await user.type(await screen.findByPlaceholderText('you@example.com'), 'buyer@example.test');
+    await user.type(screen.getByPlaceholderText('Choose a strong password'), 'password123');
+    await user.type(screen.getByPlaceholderText('Your first name'), 'Buyer');
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/currently unavailable.*suspended.*signing in again will not restore access/i);
+    expect(screen.queryByText(/COMPANY_SUSPENDED/)).not.toBeInTheDocument();
+  });
+});
+
 describe('RegisterPage Google sign-up (temporarily hidden)', () => {
   it('does not display any Google authentication option', async () => {
     renderRegister();

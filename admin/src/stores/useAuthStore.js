@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { isSessionInvalidError, setAuthHandler, setTokenSink } from '../lib/apiClient.js';
+import { isAdminPanelUser, isMemberUser } from '../lib/roles.js';
 import { fetchCurrentUser, loginRequest, logoutRequest } from '../services/auth.service.js';
 
 /**
@@ -31,13 +32,15 @@ export const useAuthStore = create((set, get) => ({
 
   isAdmin: () => isAdminUser(get().user),
 
-  /** Login → require ADMIN role, else sign straight back out. */
+  isMember: () => isMemberUser(get().user),
+
+  /** Login → require a common admin-panel role, else sign straight back out. */
   login: async ({ email, password }) => {
     set({ status: 'loading', error: null });
     try {
       const data = await loginRequest({ email, password });
       const user = data?.user ?? null;
-      if (!isAdminUser(user)) {
+      if (!isAdminPanelUser(user)) {
         await logoutRequest();
         set({
           accessToken: null,
@@ -77,7 +80,9 @@ export const useAuthStore = create((set, get) => ({
   },
 
   /**
-   * Boot: one silent refresh (cookie) → `GET /auth/me` → require ADMIN.
+   * Boot: one silent refresh (cookie) → `GET /auth/me` → require a
+   * common admin-panel role (CUSTOMER/unknown identities stay signed
+   * out locally — the panel serves staff roles only).
    * No persisted token is ever read — a reload without a live session
    * lands logged-out unless the refresh cookie is still valid. The refresh
    * itself runs inside apiClient's single-flight, shared with concurrent
@@ -108,7 +113,7 @@ export const useAuthStore = create((set, get) => ({
       // Refresh first: apiClient attaches no bearer, gets 401, refreshes
       // via cookie, then retries `me` with the rotated token.
       const user = await fetchCurrentUser();
-      if (!isAdminUser(user)) {
+      if (!isAdminPanelUser(user)) {
         set({ accessToken: null, user: null, status: 'logged-out', error: null });
         return;
       }

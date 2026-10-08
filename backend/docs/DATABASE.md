@@ -112,6 +112,8 @@ first_name
 last_name
 phone
 is_active
+password_changed_at (nullable)
+company_id (nullable → companies.id, SET NULL)
 created_at
 updated_at
 ```
@@ -119,11 +121,25 @@ updated_at
 Rules:
 
 * `id` is the primary key.
-* `email` is required and unique.
+* `email` is required and normalized (trim + lowercase), unique per
+  `(company_id, email)` — the same address may exist as a CUSTOMER in
+  different companies but never twice in one. Staff/platform emails
+  stay globally unique by application invariant (every staff creation
+  path rejects an email held by any user), so staff login stays
+  deterministic. There is NO global unique on `email` alone; a plain
+  `email` index supports staff-identity lookups.
 * Email handling must be normalized to prevent case-based duplicate accounts.
 * `password_hash` stores only Argon2id password hashes.
 * Plain-text passwords must never be stored.
 * `is_active` controls account availability.
+* `password_changed_at` is the credential watermark: set on every
+  password rotation (forgot-password reset, authenticated change,
+  SUPER_ADMIN reset); refresh tokens issued before it are rejected.
+  Null means the password never changed since account creation.
+* `company_id` is nullable by design: platform identities
+  (e.g. SUPER_ADMIN) carry no company. MySQL treats NULLs as distinct
+  in the `(company_id, email)` unique, so platform/legacy rows are
+  application-guarded, never relied upon for uniqueness.
 
 ---
 
@@ -227,6 +243,7 @@ description
 image
 is_active
 sort_order
+company_id → companies.id (RESTRICT, required)
 created_at
 updated_at
 ```
@@ -254,7 +271,8 @@ Audio
 
 Rules:
 
-* `slug` is unique.
+* `slug` is unique per `(company_id, slug)` — slugs are company-local
+  display identifiers, never global.
 * `parent_id` may be null for top-level categories.
 * Categories should normally be deactivated instead of deleted.
 * `sort_order` controls ordering.
@@ -278,6 +296,7 @@ short_description
 brand
 is_active
 is_featured
+company_id → companies.id (RESTRICT, required)
 created_at
 updated_at
 ```
@@ -293,7 +312,8 @@ Product  1 ──── N Reviews
 
 Rules:
 
-* `slug` is unique.
+* `slug` is unique per `(company_id, slug)` — slugs are company-local
+  display identifiers, never global.
 * Product does not directly contain stock.
 * Product does not directly contain SKU when variants exist.
 * Product does not directly contain the purchasable price when variants are used.
@@ -321,6 +341,7 @@ compare_at_price
 barcode
 weight
 is_active
+company_id → companies.id (RESTRICT, required, denormalized)
 created_at
 updated_at
 ```
@@ -345,7 +366,12 @@ Variants:
 
 Rules:
 
-* `sku` is unique.
+* `sku` is unique per `(company_id, sku)` — SKUs are merchant-local,
+  never global. `barcode` stays globally unique by design (barcodes
+  live in the manufacturer-global namespace).
+* `company_id` is required and denormalized from the parent product at
+  creation (write-once; `product_id` is immutable, so no sync
+  mechanism is needed).
 * `price` uses `DECIMAL(10,2)`.
 * `compare_at_price` is nullable.
 * Variant stock is stored in `inventory`.
@@ -883,13 +909,16 @@ used_count
 starts_at
 expires_at
 is_active
+company_id → companies.id (RESTRICT, required)
 created_at
 updated_at
 ```
 
 Rules:
 
-* `code` is unique.
+* `code` is globally unique (codes live in one shared namespace), but
+  every coupon row belongs to exactly one company (`company_id`,
+  required, stamped at creation).
 * Coupon validity depends on:
 
   * active state
@@ -924,6 +953,54 @@ Composite primary key:
 ```
 
 This supports product-specific coupons.
+
+---
+
+## 17.3 coupon_usages
+
+```text
+coupon_usages
+-------------
+id
+coupon_id → coupons.id (CASCADE)
+user_id → users.id (CASCADE)
+order_id → orders.id (CASCADE, unique)
+created_at
+```
+
+Rules:
+
+* One row per customer + coupon pair, written atomically inside the
+  successful order transaction (never on quote, never on failed
+  orders).
+* `(coupon_id, user_id)` is unique — the race guard for concurrent
+  same-customer orders using the same coupon.
+* `order_id` ties the usage to the consuming order. Cancelled orders
+  keep their row (no restoration semantics).
+
+---
+
+## 17.4 coupon_histories
+
+```text
+coupon_histories
+----------------
+id
+coupon_id (no FK: history survives coupon deletion)
+actor_id (nullable, no FK: survives admin deactivation)
+actor_email (nullable display snapshot)
+action (CREATED | UPDATED | DEACTIVATED | REACTIVATED | DELETED)
+metadata (nullable JSON)
+created_at
+```
+
+Rules:
+
+* Append-only admin lifecycle audit, written in the SAME transaction
+  as the coupon mutation (CREATED / UPDATED / DEACTIVATED /
+  REACTIVATED / DELETED).
+* Customer coupon usage is NOT recorded here — `coupon_usages`
+  remains its source of truth.
 
 ---
 
@@ -964,8 +1041,37 @@ categories
 
 
 coupons
- │
- └── coupon_products ─── products
+  │
+  └── coupon_products ─── products
+
+
+companies
+  │
+  ├── company_domains (CASCADE)
+  │
+  ├── users (SET NULL; admin_user_id ─── users, SET NULL)
+  │
+  ├── categories ─── products ─── product_variants
+  │
+  ├── coupons (+ coupon_usages, coupon_histories)
+  │
+  ├── marketing_notifications
+  │
+  ├── site_announcements
+  │
+  └── audit_logs (CASCADE; company_id NULL rows are platform events
+        and survive company deletion)
+
+
+audit_retention_policy ("global" singleton, no company scope)
+
+
+password_otps ─── users (CASCADE)
+
+
+return_requests ─── orders (RESTRICT)
+  │
+  └── return_request_histories (CASCADE)
 ```
 
 ---
@@ -977,17 +1083,23 @@ The database must enforce business invariants wherever practical.
 Required unique constraints include:
 
 ```text
-users.email
+(users.company_id, users.email)
 
 roles.name
 
-categories.slug
+(categories.company_id, categories.slug)
 
-products.slug
+(products.company_id, products.slug)
 
-product_variants.sku
+(product_variants.company_id, product_variants.sku)
 
-orders.order_number
+product_variants.barcode (global by design: manufacturer namespace)
+
+coupons.code (global by design: shared code namespace)
+
+company_domains.domain (global: one hostname maps to one company)
+
+orders.order_number (global by decision)
 
 (user_roles.user_id, user_roles.role_id)
 
@@ -1016,15 +1128,15 @@ users.email
 addresses.user_id
 
 categories.parent_id
-categories.slug
+categories(company_id, slug) composite unique
 
 products.category_id
-products.slug
+products(company_id, slug) composite unique
 products.is_active
 products.is_featured
 
 product_variants.product_id
-product_variants.sku
+product_variants(company_id, sku) composite unique
 
 product_images.product_id
 product_images.variant_id
@@ -1300,15 +1412,17 @@ Image binaries must never be stored in database columns.
 
 Previously listed here, `order_status_history` is now implemented
 (see §12 and the new §26A–26D below) because the order-tracking
-milestone created the concrete business requirement.
+milestone created the concrete business requirement. Likewise
+`returns`/`return_request_history` (see §26E), `password_otps`
+(see §26F), `companies`/`company_domains` (see §26G), and
+`audit_logs`/`audit_retention_policy` (see §26H) are implemented
+and documented in their sections — they are no longer future items.
 
 ```text
 refresh_tokens
 product_options
 product_option_values
-returns
 refunds
-audit_logs
 ```
 
 They must not be added simply because they might become useful.
@@ -1417,6 +1531,192 @@ Rules:
 
 ---
 
+# 26E. Returns (customer return requests)
+
+```text
+return_requests
+---------------
+id
+order_id → orders.id (RESTRICT, unique: one request per order)
+user_id → users.id (RESTRICT)
+status (REQUESTED | APPROVED | REJECTED | COMPLETED | CANCELLED;
+  default REQUESTED — only REQUESTED is produced today)
+reason (WRONG_COLOR | WRONG_SIZE | DAMAGED | DEFECTIVE | WRONG_ITEM |
+  NOT_AS_DESCRIBED | CHANGED_MIND | OTHER)
+details (nullable, ≤ 1000 chars)
+created_at
+updated_at
+```
+
+```text
+return_request_histories
+------------------------
+id
+return_request_id → return_requests.id (CASCADE)
+status
+actor_id (nullable, no FK)
+metadata (nullable JSON)
+created_at
+```
+
+Rules:
+
+* A return request never mutates `orders.status`, payments, or
+  inventory — it is a separate business process from the order
+  lifecycle.
+* The `order_id` unique is the duplicate-creation race guard.
+* No status-change workflow exists yet: rows stay REQUESTED and the
+  admin surface is read-only.
+
+---
+
+# 26F. Password OTPs (credential recovery/change)
+
+```text
+password_otps
+-------------
+id
+user_id → users.id (CASCADE)
+purpose (PASSWORD_RESET | PASSWORD_CHANGE)
+otp_hash (Argon2id hash only — never the code)
+expires_at (10 minutes)
+attempts (default 0, bounded at 5)
+verified_at (nullable; required before reset completion)
+used_at (nullable; set on successful rotation)
+created_at
+```
+
+Rules:
+
+* Issuing a code supersedes (deletes) older codes for the same
+  `(userId, purpose)`; success consumes (`used_at`).
+* OTP rows are keyed by `userId`, so a code issued for one company's
+  account can never verify against another's.
+* Every rotation sets `users.password_changed_at` (the refresh
+  watermark) in the same transaction.
+
+---
+
+# 26G. Companies and Company Domains (multi-company SaaS)
+
+```text
+companies
+---------
+id
+name
+status (ACTIVE | SUSPENDED, default ACTIVE)
+admin_user_id (nullable, unique → users.id, SET NULL)
+google_sign_in_enabled (BOOLEAN NOT NULL DEFAULT true)
+contact_email (nullable VARCHAR(255), business contact, lowercased)
+contact_phone (nullable VARCHAR(30), business contact)
+address_line1 (nullable VARCHAR(255))
+address_line2 (nullable VARCHAR(255))
+city (nullable VARCHAR(100))
+state (nullable VARCHAR(100))
+postal_code (nullable VARCHAR(20))
+country (nullable VARCHAR(100))
+website (nullable VARCHAR(500), HTTPS-only)
+logo_path (nullable VARCHAR(500), backend-managed storage reference)
+created_at
+updated_at
+```
+
+```text
+company_domains
+---------------
+id
+company_id → companies.id (CASCADE, required)
+domain (globally unique hostname, canonical form)
+is_primary (default false)
+is_active (default true)
+created_at
+updated_at
+```
+
+Rules:
+
+* One Company = one store/business; the UUID is the internal
+  isolation key and is never accepted from untrusted clients.
+* `admin_user_id` is the exactly-one-ADMIN-per-company link, nullable
+  only for the create/provision bootstrap window.
+* `google_sign_in_enabled` is the company-scoped Google sign-in
+  allowlist flag (Phase 4-4): true (default) permits Google ID-token
+  authentication on the company's domain traffic; false denies it
+  fail-closed. NOT NULL DEFAULT true, so rollout changes nothing.
+  This is not the P.6 per-company OAuth client list (mobile
+  audience union), which remains deferred.
+* Business-profile columns (Phase 2C-33, migration
+  `20261008063329_phase2c33_company_profile`): all nullable with
+  no backfill (existing rows read NULL → "Not provided"), no
+  indexes or unique constraints, dedicated columns (never JSON).
+  `website` is HTTPS-only by application validation;
+  `logo_path` is stamped by the dedicated logo upload endpoint
+  only (never client input) and joins deletion-cascade media
+  cleanup. No favicon/social/theme/billing columns exist by
+  product decision.
+* `domain` is globally unique: one hostname maps to exactly one
+  company. Stored values are canonical (`normalizeHostname`:
+  trim + lowercase, one trailing dot stripped, numeric `:port`
+  stripped, scheme/path/credential/UUID forms rejected).
+* At most one primary domain per company (application-level
+  invariant; MySQL cannot express it as a partial unique index).
+  The first domain of a company becomes primary; promotion
+  demotes siblings atomically. A company may hold zero domains.
+* Only active (`is_active`) registrations resolve at runtime.
+  `isActive` is orthogonal to company `status`: suspension blocks
+  the storefront through the request gate, never by flipping domains.
+* Company #1 (`35b5a215-0cf3-42db-ba42-6fac6656a708`, "Tech Pulse")
+  is permanently protected from deletion by stable UUID.
+* Permanent deletion (SUSPENDED-only, exact-name-confirmed) purges
+  the whole tenant graph in FK dependency order inside one
+  transaction; `company_domains` rows cascade with the company.
+
+---
+
+# 26H. Audit Log and Retention Policy
+
+```text
+audit_logs
+----------
+id
+actor_id (nullable, no FK: rows survive user deletion)
+actor_role
+actor_email (nullable snapshot)
+company_id (nullable → companies.id, CASCADE; null = platform event)
+action
+resource
+resource_id (nullable)
+outcome (SUCCESS | FAILURE)
+details (nullable JSON, allowlisted safe metadata only)
+created_at
+```
+
+```text
+audit_retention_policy
+----------------------
+id ("global": exactly one row, the platform singleton)
+policy (NEVER | 30_DAYS | 1_YEAR, default NEVER)
+updated_by (nullable actor snapshot, no FK)
+created_at
+updated_at
+```
+
+Rules:
+
+* Append-only from the application's perspective: no update or
+  delete paths exist. Only retention cleanup (age-based purge) and
+  company-deletion cascade (company-scoped rows) may remove rows.
+* `company_id` NULL marks platform-level events (company lifecycle,
+  retention changes); these survive company deletion. Company-scoped
+  rows purge with their company.
+* Retention `NEVER` (the default, including "no row") deletes
+  nothing; cleanup purges strictly-older-than-cutoff rows in
+  bounded batches and writes no audit rows itself.
+* Details carry safe metadata only — never passwords, hashes, codes,
+  or tokens (the writer rejects secret-bearing keys/values).
+
+---
+
 # 27. Database Change Policy
 
 Before changing the schema:
@@ -1495,6 +1795,15 @@ reviews
 coupons
 coupon_products
 ```
+
+Added after the initial scope by concrete later requirements (each
+with its own section above): `order_status_history` (§26A),
+`notifications` (§26B), `marketing_notifications` (§26C),
+`site_announcements` (§26D), `coupon_usages` (§17.3),
+`coupon_histories` (§17.4), `return_requests` +
+`return_request_histories` (§26E), `password_otps` (§26F),
+`companies` + `company_domains` (§26G), `audit_logs` +
+`audit_retention_policy` (§26H).
 
 No `admin` table/module is required.
 

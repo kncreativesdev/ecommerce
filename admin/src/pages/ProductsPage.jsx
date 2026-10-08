@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Ban, PackagePlus, PackageSearch, Pencil, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useTaxonomy } from '../hooks/useTaxonomy.js';
+import { useAuthStore } from '../stores/useAuthStore.js';
 import { useProductStore } from '../stores/useProductStore.js';
 import { activateProduct, deactivateProduct, deleteProduct } from '../services/product.service.js';
 import { findCategoryById } from '../utils/taxonomy.js';
@@ -55,6 +56,13 @@ const PRODUCT_COLUMNS = [
 
 export function ProductsPage() {
   const { categories } = useTaxonomy();
+  // Role-aware controls: HEAD shares create/edit/deactivate/reactivate,
+  // but hard delete and the inactive/all scope filter stay ADMIN-only
+  // (backend 403s there — never render the control). MEMBER shares
+  // create/edit only: deactivate/reactivate hide (no DEACTIVATE grant).
+  const isAdmin = useAuthStore((state) => state.isAdmin());
+  const isMember = useAuthStore((state) => state.isMember());
+  const canLifecycleProduct = !isMember;
   const products = useProductStore((state) => state.products);
   const status = useProductStore((state) => state.status);
   const error = useProductStore((state) => state.error);
@@ -219,6 +227,7 @@ export function ProductsPage() {
 
       {!isLoading && !error && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {isAdmin ? (
           <div role="group" aria-label="Product status filter" className="inline-flex self-start rounded-lg border border-border bg-surface p-1">
             {SCOPES.map((option) => (
               <button
@@ -238,6 +247,7 @@ export function ProductsPage() {
               </button>
             ))}
           </div>
+          ) : null}
           {products.length > 0 ? (
             <div role="search" className="relative w-full sm:max-w-md">
               <label htmlFor="product-search" className="sr-only">
@@ -362,6 +372,7 @@ export function ProductsPage() {
                     <Pencil size={17} aria-hidden="true" />
                   </Link>
                   {product.isActive ? (
+                    canLifecycleProduct ? (
                     <button
                       type="button"
                       onClick={() => setDeactivating(product)}
@@ -371,8 +382,10 @@ export function ProductsPage() {
                     >
                       <Ban size={17} aria-hidden="true" />
                     </button>
+                    ) : null
                   ) : (
                     <>
+                      {canLifecycleProduct ? (
                       <button
                         type="button"
                         onClick={() => handleActivate(product)}
@@ -383,6 +396,8 @@ export function ProductsPage() {
                       >
                         <RotateCcw size={17} aria-hidden="true" />
                       </button>
+                      ) : null}
+                      {isAdmin ? (
                       <button
                         type="button"
                         onClick={() => setDeleting(product)}
@@ -392,6 +407,7 @@ export function ProductsPage() {
                       >
                         <Trash2 size={17} aria-hidden="true" />
                       </button>
+                      ) : null}
                     </>
                   )}
                 </span>

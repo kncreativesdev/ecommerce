@@ -6,6 +6,7 @@ import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { clearGoogleCertsCache } from "../../src/modules/auth/auth.google.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany } from "../helpers/userFixtures.js";
 import { createRequire } from "module";
 
 // NOTE: backend sources load through native `require()` (CommonJS), which
@@ -31,7 +32,8 @@ const nativeEnv = nativeRequire("../../src/config/env.js").env;
 
 const RUN = `TSTGO${Date.now().toString(36).toUpperCase()}`;
 const CLIENT_ID = "test-google-client.apps.googleusercontent.com";
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
 
 const { privateKey, publicKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
 const PUBLIC_JWK = { ...publicKey.export({ format: "jwk" }), kid: "test-kid", alg: "RS256", use: "sig" };
@@ -149,6 +151,7 @@ describe("POST /auth/google", () => {
     const email = `${RUN.toLowerCase()}-new@example.test`;
     const res = await request(app).post("/api/v1/auth/google").send({ idToken: signIdToken(validPayload(email)) });
     expect(res.status).toBe(200);
+    await stampUserCompany(res.body.data.user.id);
     expect(res.body.data.user).toMatchObject({ email, firstName: "Google", lastName: "Tester" });
     expect(res.body.data.user.roles).toContain("CUSTOMER");
     expect(res.body.data.accessToken).toBeTruthy();
@@ -181,6 +184,7 @@ describe("POST /auth/google", () => {
       lastName: "User",
     });
     expect(registered.status).toBe(201);
+    await stampUserCompany(registered.body.data.user.id);
 
     const res = await request(app).post("/api/v1/auth/google").send({ idToken: signIdToken(validPayload(email)) });
     expect(res.status).toBe(200);
@@ -191,6 +195,9 @@ describe("POST /auth/google", () => {
     const email = `${RUN.toLowerCase()}-inactive@example.test`;
     const first = await request(app).post("/api/v1/auth/google").send({ idToken: signIdToken(validPayload(email)) });
     expect(first.status).toBe(200);
+    // Legitimate company customer: the admin deactivation below is
+    // company-scoped, so the fixture must resolve.
+    await stampUserCompany(first.body.data.user.id);
 
     const deactivated = await request(app)
       .patch(`/api/v1/users/${first.body.data.user.id}`)

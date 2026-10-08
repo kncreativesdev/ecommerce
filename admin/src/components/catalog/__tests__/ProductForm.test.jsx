@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProductForm } from '../ProductForm.jsx';
+import { useAuthStore } from '../../../stores/useAuthStore.js';
 
 const CATEGORIES = [
   { id: 'cat1', name: 'Audio', slug: 'audio', parentId: null, isActive: true, sortOrder: 0 },
@@ -174,8 +175,23 @@ describe('ProductForm variant-first create UX', () => {
     expect(mediaAction).not.toHaveProperty('productImages');
     expect(mediaAction.variantImages).toHaveLength(2);
     expect(mediaAction.variantImages[0].sku).toBe('SPK-BLK');
-    expect(mediaAction.variantImages[0].files).toEqual([blk1, blk2]);
+    expect(mediaAction.variantImages[0].files).toEqual([blk1, blu1]);
     expect(mediaAction.variantImages[1].sku).toBe('SPK-BLU');
     expect(mediaAction.variantImages[1].files).toEqual([blu1]);
+  });
+});
+
+describe('ProductForm Active toggle role gating', () => {
+  it('shows the Active toggle to ADMIN', () => {
+    useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
+    renderCreate();
+    expect(screen.getByRole('checkbox', { name: 'Active (visible in storefront)' })).toBeInTheDocument();
+  });
+
+  it('hides Active but keeps Featured for HEAD', () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    renderCreate();
+    expect(screen.queryByRole('checkbox', { name: 'Active (visible in storefront)' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Featured (eligible for curated rails)' })).toBeInTheDocument();
   });
 });

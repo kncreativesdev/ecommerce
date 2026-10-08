@@ -1,5 +1,6 @@
 const { prisma } = require("../../config/database");
 const { toAuditSnapshot } = require("./coupons.utils");
+const auditRepository = require("../audit/audit.repository");
 
 const COUPON_SELECT = {
   id: true,
@@ -14,6 +15,9 @@ const COUPON_SELECT = {
   startsAt: true,
   expiresAt: true,
   isActive: true,
+  // Tenant ownership for Phase 2C-6 coupon isolation. Selected, never
+  // serialized (toSafeCoupon picks explicit fields — verified).
+  companyId: true,
   createdAt: true,
   updatedAt: true,
   products: {
@@ -28,9 +32,15 @@ async function findCouponByCode(code) {
   });
 }
 
-async function findCouponById(id) {
-  return prisma.coupon.findUnique({
-    where: { id },
+/**
+ * Phase 2C-6 company scoping: the global code lookup
+ * (findCouponByCode) stays global — codes remain globally unique until
+ * the composite phase — but every id-addressed read is company-gated.
+ * Cross-company ids read as missing (callers map to 404).
+ */
+async function findCouponById(id, companyId) {
+  return prisma.coupon.findFirst({
+    where: { id, companyId },
     select: COUPON_SELECT,
   });
 }
@@ -42,9 +52,11 @@ async function findCouponById(id) {
  * must stay discoverable.
  */
 async function findCouponsAdmin(filters) {
-  const { status, search, skip, take } = filters;
+  const { companyId, status, search, skip, take } = filters;
 
-  const and = [];
+  // Company predicate leads: the search OR (nested in one AND member)
+  // can never escape it.
+  const and = [{ companyId }];
   if (status === "active") {
     and.push({ isActive: true });
   } else if (status === "inactive") {
@@ -76,9 +88,9 @@ async function findExistingProductIds(ids) {
   }
   const rows = await prisma.product.findMany({
     where: { id: { in: ids } },
-    select: { id: true },
+    select: { id: true, companyId: true },
   });
-  return rows.map((row) => row.id);
+  return rows;
 }
 
 /**
@@ -109,7 +121,7 @@ async function writeHistoryTx(tx, { couponId, actorId, action, metadata }) {
   });
 }
 
-async function createCouponRecord(data, productIds, audit) {
+async function createCouponRecord(data, productIds, audit, auditLog = null) {
   return prisma.$transaction(async (tx) => {
     const coupon = await tx.coupon.create({
       data,
@@ -123,11 +135,16 @@ async function createCouponRecord(data, productIds, audit) {
     if (audit) {
       await writeHistoryTx(tx, { couponId: coupon.id, ...audit });
     }
+    // Phase 2C-17: the pre-validated AuditLog event (code-redacted by
+    // the service) commits with the coupon it describes.
+    if (auditLog) {
+      await auditRepository.createAuditEvent({ ...auditLog, resourceId: coupon.id }, tx);
+    }
     return coupon.id;
   });
 }
 
-async function updateCouponRecord(id, data, productIds, audit) {
+async function updateCouponRecord(id, data, productIds, audit, auditLog = null) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.coupon.findUnique({
       where: { id },
@@ -150,11 +167,17 @@ async function updateCouponRecord(id, data, productIds, audit) {
     if (audit) {
       await writeHistoryTx(tx, { couponId: id, ...audit });
     }
+    // Phase 2C-17: cross-resource trail alongside the domain history
+    // (written only when the update actually applies — missing rows
+    // returned above).
+    if (auditLog) {
+      await auditRepository.createAuditEvent({ ...auditLog, resourceId: id }, tx);
+    }
     return { outcome: "ok" };
   });
 }
 
-async function deleteCouponRecord(id, audit) {
+async function deleteCouponRecord(id, audit, auditLog = null) {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.coupon.findUnique({
       where: { id },
@@ -191,6 +214,11 @@ async function deleteCouponRecord(id, audit) {
         action: audit.action,
         metadata: { snapshot: toAuditSnapshot(existing) },
       });
+    }
+    // Phase 2C-17: DELETED trail (the history row above survives via
+    // the FK-free table; this one joins the cross-resource log).
+    if (auditLog) {
+      await auditRepository.createAuditEvent({ ...auditLog, resourceId: id }, tx);
     }
     await tx.coupon.delete({ where: { id } });
     return { outcome: "ok" };

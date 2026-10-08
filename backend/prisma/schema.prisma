@@ -97,21 +97,48 @@ enum MarketingNotificationType {
   ANNOUNCEMENT
 }
 
+// Company lifecycle for the multi-company SaaS foundation (Phase 1).
+// ACTIVE: normal operation. SUSPENDED: operation disabled, data
+// preserved (enforcement arrives in a later phase).
+enum CompanyStatus {
+  ACTIVE
+  SUSPENDED
+}
+
 // ============================================================
 // USERS
 // ============================================================
 
 model User {
   id           String   @id @default(uuid()) @db.Char(36)
-  email        String   @unique @db.VarChar(255)
+  // Customer identity is company-scoped (Phase 2C-26): the same
+  // normalized email may exist as a CUSTOMER in different companies.
+  // Uniqueness is enforced per (companyId, email) below — never by
+  // this column alone. Staff/platform emails stay globally unique by
+  // application invariant (every staff creation path rejects an email
+  // already held by any user), so staff login stays deterministic.
+  email        String   @db.VarChar(255)
   passwordHash String   @map("password_hash") @db.VarChar(255)
   firstName    String?  @map("first_name") @db.VarChar(100)
   lastName     String?  @map("last_name") @db.VarChar(100)
   phone        String?  @db.VarChar(30)
   isActive     Boolean  @default(true) @map("is_active")
+  // Credential watermark (Phase 2C-16): set whenever the password
+  // changes (forgot-password reset, authenticated change, SUPER_ADMIN
+  // credential reset). The refresh flow rejects tokens issued before
+  // it — stateless session invalidation without JWT claim changes.
+  // Null means the password never changed since account creation.
+  passwordChangedAt DateTime? @map("password_changed_at")
+  // Tenant association (Phase 1 foundation). Nullable: platform-level
+  // identities such as the future SUPER_ADMIN carry no company, and the
+  // column is backfilled for existing rows. Email uniqueness stays
+  // global until Phase 2 introduces company-scoped uniqueness.
+  companyId    String?  @map("company_id") @db.Char(36)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
+  company   Company?  @relation("CompanyUsers", fields: [companyId], references: [id], onDelete: SetNull)
+  adminOf   Company?  @relation("CompanyAdmin")
   roles     UserRole[]
   addresses Address[]
   cart      Cart?
@@ -121,9 +148,102 @@ model User {
   notifications Notification[]
   couponUsages CouponUsage[]
   returnRequests ReturnRequest[]
+  passwordOtps PasswordOtp[]
+  refreshSessions RefreshSession[]
 
   @@index([isActive])
+  @@index([companyId])
+  // Global email lookup index (Phase 2C-26): staff-identity and
+  // existence checks query by email alone across companies.
+  @@index([email])
+  // Company-scoped customer identity (Phase 2C-26): one row per
+  // (company, normalized email), so the same email can exist in
+  // different companies but never twice in one. NULL companyId rows
+  // (platform identities, legacy unassigned accounts) are
+  // application-guarded; MySQL treats NULLs as distinct here.
+  @@unique([companyId, email])
   @@map("users")
+}
+
+// ============================================================
+// COMPANIES (multi-company SaaS foundation, Phase 1)
+// ============================================================
+// One Company = one ecommerce store/business. The company UUID is the
+// internal isolation key; it is never accepted from untrusted clients
+// (resolution/enforcement arrive in later phases).
+// adminUserId is the exactly-one-ADMIN-per-company association. It is
+// nullable only for the create/provision bootstrap window between
+// company creation and ADMIN credential generation.
+
+model Company {
+  id          String        @id @default(uuid()) @db.Char(36)
+  name        String        @db.VarChar(255)
+  status      CompanyStatus @default(ACTIVE)
+  adminUserId String?       @unique @map("admin_user_id") @db.Char(36)
+  // Company-scoped Google sign-in allowlist (Phase 4-4): whether Google
+  // ID-token authentication is permitted for this company's domain
+  // traffic. True by default so rollout changes nothing; SUPER_ADMIN
+  // may disable per company. This is NOT the P.6 per-company OAuth
+  // client list (mobile audience union) — that remains deferred.
+  googleSignInEnabled Boolean @default(true) @map("google_sign_in_enabled")
+  // Business profile (SUPER_ADMIN-managed platform metadata, Phase
+  // 2C-33). All nullable: existing rows stay NULL (no backfill), and
+  // NULL renders as "Not provided" in admin UI. Business-contact data
+  // only — never secrets, credentials, or operational ecommerce data.
+  // No indexes or unique constraints on these columns. logoPath is a
+  // backend-managed storage reference (like Category.image), never
+  // client-settable; it is stamped by the dedicated logo upload
+  // endpoint only.
+  contactEmail String? @map("contact_email") @db.VarChar(255)
+  contactPhone String? @map("contact_phone") @db.VarChar(30)
+  addressLine1 String? @map("address_line1") @db.VarChar(255)
+  addressLine2 String? @map("address_line2") @db.VarChar(255)
+  city         String? @db.VarChar(100)
+  state        String? @db.VarChar(100)
+  postalCode   String? @map("postal_code") @db.VarChar(20)
+  country      String? @db.VarChar(100)
+  website      String? @db.VarChar(500)
+  logoPath     String? @map("logo_path") @db.VarChar(500)
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  admin    User?           @relation("CompanyAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
+  users    User[]          @relation("CompanyUsers")
+  domains  CompanyDomain[]
+  categories Category[]
+  products   Product[]
+  variants   ProductVariant[]
+  coupons    Coupon[]
+  marketingNotifications MarketingNotification[]
+  announcements SiteAnnouncement[]
+  auditLogs AuditLog[]
+
+  @@index([status])
+  @@map("companies")
+}
+
+// ============================================================
+// COMPANY DOMAINS (registered-hostname registry, Phase 1)
+// ============================================================
+// Database registry mapping registered hostnames to companies for
+// future domain-based storefront resolution. DNS/TLS automation is
+// deployment infrastructure and lives outside the backend. Single
+// primary per company is an application-level invariant enforced in a
+// later phase (MySQL cannot express it as a partial unique index).
+
+model CompanyDomain {
+  id        String   @id @default(uuid()) @db.Char(36)
+  companyId String   @map("company_id") @db.Char(36)
+  domain    String   @unique @db.VarChar(255)
+  isPrimary Boolean  @default(false) @map("is_primary")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("company_domains")
 }
 
 // ============================================================
@@ -154,6 +274,69 @@ model UserRole {
   @@id([userId, roleId])
   @@index([roleId])
   @@map("user_roles")
+}
+
+// ============================================================
+// PASSWORD OTPS (credential recovery/change, Phase 2C-16)
+// ============================================================
+// Short-lived single-use verification codes for the forgot-password
+// flow (PASSWORD_RESET) and the authenticated password-change flow
+// (PASSWORD_CHANGE). Only Argon2id hashes are stored — never the
+// code itself. Rows are consumed (usedAt) on success, superseded
+// (deleted) when a newer code is issued, and bounded by an attempt
+// counter; expiry is enforced by the service on every use.
+
+enum OtpPurpose {
+  PASSWORD_RESET
+  PASSWORD_CHANGE
+}
+
+model PasswordOtp {
+  id        String     @id @default(uuid()) @db.Char(36)
+  userId    String     @map("user_id") @db.Char(36)
+  purpose   OtpPurpose @map("purpose")
+  otpHash   String     @map("otp_hash") @db.VarChar(255)
+  expiresAt DateTime   @map("expires_at")
+  attempts  Int        @default(0) @map("attempts")
+  verifiedAt DateTime? @map("verified_at")
+  usedAt    DateTime?  @map("used_at")
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("password_otps")
+}
+
+// ============================================================
+// REFRESH SESSIONS (one-time refresh-token rotation)
+// ============================================================
+// Persistent server-side record for every issued refresh token,
+// keyed by a SHA-256 hash of the token's `jti` claim (never the
+// raw token — a jti alone cannot mint anything without the server
+// signing secret). Successful refresh atomically revokes the
+// presented row before a successor row is created, so a `jti` is
+// consumable exactly once even under concurrent requests; logout
+// revokes instead of merely clearing the cookie. Rows survive
+// process restarts (MySQL-backed) and cascade with the user.
+// Expired rows are purged by bounded cleanup (per-user on
+// issuance, global on the retention tick) — never scanned
+// unboundedly per request.
+
+model RefreshSession {
+  id        String    @id @default(uuid()) @db.Char(36)
+  userId    String    @map("user_id") @db.Char(36)
+  jtiHash   String    @unique @map("jti_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_sessions")
 }
 
 // ============================================================
@@ -191,21 +374,28 @@ model Category {
   id          String   @id @default(uuid()) @db.Char(36)
   parentId    String?  @map("parent_id") @db.Char(36)
   name        String   @db.VarChar(150)
-  slug        String   @unique @db.VarChar(180)
+  slug        String   @db.VarChar(180)
   description String?  @db.Text
   image       String?  @db.VarChar(500)
   isActive    Boolean  @default(true) @map("is_active")
   sortOrder   Int      @default(0) @map("sort_order")
+  // Tenant association (Phase 1 foundation, hardened Phase 2C-10).
+  // Slugs are company-local display identifiers (lookups are by id),
+  // so uniqueness is per-company. Required: every writer stamps it.
+  companyId   String   @map("company_id") @db.Char(36)
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
   children Category[] @relation("CategoryHierarchy")
   products Product[]
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@index([parentId])
   @@index([isActive])
   @@index([sortOrder])
+  @@index([companyId])
+  @@unique([companyId, slug])
   @@map("categories")
 }
 
@@ -217,16 +407,21 @@ model Product {
   id               String   @id @default(uuid()) @db.Char(36)
   categoryId       String   @map("category_id") @db.Char(36)
   name             String   @db.VarChar(255)
-  slug             String   @unique @db.VarChar(280)
+  slug             String   @db.VarChar(280)
   description      String?  @db.Text
   shortDescription String?  @map("short_description") @db.Text
   brand            String?  @db.VarChar(100)
   isActive         Boolean  @default(true) @map("is_active")
   isFeatured       Boolean  @default(false) @map("is_featured")
+  // Tenant association (Phase 1 foundation, hardened Phase 2C-10).
+  // Slugs are company-local display identifiers (lookups are by id),
+  // so uniqueness is per-company. Required: every writer stamps it.
+  companyId        String   @map("company_id") @db.Char(36)
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   category      Category         @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  company       Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
   variants      ProductVariant[]
   images        ProductImage[]
   reviews       Review[]
@@ -238,6 +433,8 @@ model Product {
   @@index([isActive])
   @@index([isFeatured])
   @@index([categoryId, isActive])
+  @@index([companyId])
+  @@unique([companyId, slug])
   @@map("products")
 }
 
@@ -248,17 +445,27 @@ model Product {
 model ProductVariant {
   id             String   @id @default(uuid()) @db.Char(36)
   productId      String   @map("product_id") @db.Char(36)
-  sku            String   @unique @db.VarChar(100)
+  sku            String   @db.VarChar(100)
   name           String   @db.VarChar(150)
   price          Decimal  @db.Decimal(10, 2)
   compareAtPrice Decimal? @map("compare_at_price") @db.Decimal(10, 2)
+  // Barcodes live in the manufacturer-global namespace (same physical
+  // product across merchants), so barcode uniqueness intentionally
+  // stays global. SKUs are merchant-local: unique per company.
   barcode        String?  @unique @db.VarChar(100)
   weight         Decimal? @db.Decimal(10, 3)
   isActive       Boolean  @default(true) @map("is_active")
+  // Denormalized tenant association (Phase 1 foundation, per Phase 0
+  // decision P.3; hardened Phase 2C-10). Write-once at creation
+  // alongside the parent product's companyId; productId itself is
+  // immutable by application behavior, so no synchronization mechanism
+  // is required. Required: every writer stamps it.
+  companyId      String   @map("company_id") @db.Char(36)
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  product Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   images     ProductImage[]
   inventory  Inventory?
@@ -267,6 +474,8 @@ model ProductVariant {
 
   @@index([productId])
   @@index([productId, isActive])
+  @@index([companyId])
+  @@unique([companyId, sku])
   @@map("product_variants")
 }
 
@@ -574,9 +783,14 @@ model Coupon {
   startsAt              DateTime?    @map("starts_at")
   expiresAt             DateTime?    @map("expires_at")
   isActive              Boolean      @default(true) @map("is_active")
+  // Tenant association (Phase 2C-6, hardened Phase 2C-10). Coupon
+  // codes stay globally unique, but every coupon row belongs to
+  // exactly one company. Required: stamped at creation.
+  companyId             String      @map("company_id") @db.Char(36)
   createdAt             DateTime     @default(now()) @map("created_at")
   updatedAt             DateTime     @updatedAt @map("updated_at")
 
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Restrict)
   products CouponProduct[]
   orders   Order[]
   usages   CouponUsage[]
@@ -584,6 +798,7 @@ model Coupon {
   @@index([isActive])
   @@index([startsAt])
   @@index([expiresAt])
+  @@index([companyId])
   @@map("coupons")
 }
 
@@ -786,12 +1001,19 @@ model MarketingNotification {
   linkType  String?                   @map("link_type") @db.VarChar(20)
   linkValue String?                   @map("link_value") @db.VarChar(100)
   createdBy String?                   @map("created_by") @db.Char(36)
+  // Tenant association (Phase 2C-7, hardened Phase 2C-10). No
+  // derivable company exists, so the column is required: every writer
+  // stamps the creator's server-resolved company.
+  companyId String                   @map("company_id") @db.Char(36)
   createdAt DateTime                  @default(now()) @map("created_at")
   updatedAt DateTime                  @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@index([isActive])
   @@index([startsAt])
   @@index([expiresAt])
+  @@index([companyId])
   @@map("marketing_notifications")
 }
 
@@ -814,11 +1036,72 @@ model SiteAnnouncement {
   linkTarget String?  @map("link_target") @db.VarChar(200)
   priority  Int       @default(0)
   createdBy String?   @map("created_by") @db.Char(36)
+  // Tenant association (Phase 2C-7, hardened Phase 2C-10). Same
+  // rationale as marketing broadcasts; required, stamped at creation.
+  // The public /current read stays global until CompanyDomain runtime
+  // resolution (documented limitation).
+  companyId String   @map("company_id") @db.Char(36)
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@index([isActive])
   @@index([startsAt])
   @@index([expiresAt])
+  @@index([companyId])
   @@map("site_announcements")
+}
+
+// ============================================================
+// AUDIT LOG (cross-cutting security/activity record, Phase 2C-14)
+// ============================================================
+// Append-only from the application's perspective: no update or
+// delete paths exist (only retention cleanup and company-deletion
+// purge may remove rows in the future). This is NOT an
+// authorization source and does NOT replace the domain histories
+// (OrderStatusHistory, CouponHistory, inventory ledger), which stay
+// intact. Actor identity is snapshotted (role + email) with no hard
+// user FK so rows survive user deletion, following the history-table
+// convention. companyId null marks platform-level events.
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Char(36)
+  actorId     String?  @map("actor_id") @db.Char(36)
+  actorRole   String   @map("actor_role") @db.VarChar(50)
+  actorEmail  String?  @map("actor_email") @db.VarChar(255)
+  companyId   String?  @map("company_id") @db.Char(36)
+  action      String   @map("action") @db.VarChar(50)
+  resource    String   @map("resource") @db.VarChar(100)
+  resourceId  String?  @map("resource_id") @db.Char(36)
+  outcome     String   @map("outcome") @db.VarChar(20)
+  details     Json?    @map("details")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([resource, resourceId, createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================
+// AUDIT RETENTION POLICY (platform singleton, Phase 2C-19)
+// ============================================================
+// Exactly one row (id "global") holds the platform-wide audit-log
+// retention setting. NEVER is the default (no row means NEVER —
+// cleanup deletes nothing). Only SUPER_ADMIN changes it through the
+// retention API; per-company retention does not exist. updatedBy is
+// the actor id snapshot with no user FK (survives user deletion,
+// history-table convention).
+
+model AuditRetentionPolicy {
+  id        String   @id @default("global") @db.VarChar(32)
+  policy    String   @default("NEVER") @db.VarChar(20)
+  updatedBy String?  @map("updated_by") @db.Char(36)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("audit_retention_policy")
 }

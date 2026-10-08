@@ -3,7 +3,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CouponEditPage } from '../CouponEditPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { fetchCouponById, fetchCouponHistory } from '../../services/coupon.service.js';
+import { fetchProducts } from '../../services/product.service.js';
 
 vi.mock('../../services/coupon.service.js', () => ({
   fetchCouponById: vi.fn(),
@@ -128,5 +130,21 @@ describe('CouponEditPage coupon history action', () => {
     expect(await screen.findByText('Coupon not found')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /coupon history/i })).not.toBeInTheDocument();
     expect(fetchCouponHistory).not.toHaveBeenCalled();
+  });
+});
+
+describe('CouponEditPage product eligibility scope', () => {
+  it("loads all products for ADMIN", async () => {
+    useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
+    renderEditPage();
+    await screen.findByText('SAVE10');
+    expect(fetchProducts).toHaveBeenCalledWith('all');
+  });
+
+  it("loads active products for HEAD (inactive rows stay out of reach)", async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    renderEditPage();
+    await screen.findByText('SAVE10');
+    expect(fetchProducts).toHaveBeenCalledWith('active');
   });
 });

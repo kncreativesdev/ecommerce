@@ -7,6 +7,10 @@ const VARIANT_FOR_CART_SELECT = {
   name: true,
   price: true,
   isActive: true,
+  // Tenant ownership for Phase 2C-1 cart/checkout enforcement. Selected
+  // (never serialized) so services can reject cross-company variants
+  // with the same 404 as unknown ids — no existence oracle.
+  companyId: true,
 };
 
 const CART_IMAGE_SELECT = {
@@ -37,6 +41,9 @@ const CART_ITEM_WITH_VARIANT_SELECT = {
           name: true,
           slug: true,
           isActive: true,
+          // Tenant ownership for the Phase 2C-8 read gate. Selected,
+          // never serialized (toSafeCartItem picks explicit fields).
+          companyId: true,
           images: CART_IMAGE_SELECT,
         },
       },
@@ -97,6 +104,7 @@ async function findVariantForCart(variantId) {
           name: true,
           slug: true,
           isActive: true,
+          companyId: true,
         },
       },
       inventory: {

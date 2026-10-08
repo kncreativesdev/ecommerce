@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
+  apiDownloadCsv,
   apiGet,
   apiGetPage,
   isSessionInvalidError,
@@ -188,5 +189,67 @@ describe('apiClient refresh retry guards', () => {
     // Two originals + ONE shared refresh + two retries — never a storm.
     expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+});
+
+function csvResponse({ ok = true, status = 200, body = 'id\n1', filename = 'audit-logs-20260304T050607Z.csv' } = {}) {
+  return {
+    ok,
+    status,
+    headers: { get: (name) => (name === 'Content-Disposition' ? `attachment; filename="${filename}"` : null) },
+    blob: async () => new Blob([body], { type: 'text/csv' }),
+    json: async () => {
+      throw new Error('not json');
+    },
+  };
+}
+
+describe('apiDownloadCsv', () => {
+  it('returns the backend blob with the server filename', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(csvResponse()));
+
+    const { blob, filename } = await apiDownloadCsv('/audit-logs/export?resource=ORDER');
+
+    expect(await blob.text()).toBe('id\n1');
+    expect(filename).toBe('audit-logs-20260304T050607Z.csv');
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/audit-logs/export?resource=ORDER'),
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('falls back to a fixed filename when the header is absent', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        blob: async () => new Blob(['id']),
+      }),
+    );
+
+    const { filename } = await apiDownloadCsv('/audit-logs/export');
+    expect(filename).toBe('audit-logs.csv');
+  });
+
+  it('surfaces backend error envelopes (e.g. over-limit) as ApiError, never a download', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        headers: { get: () => null },
+        blob: async () => {
+          throw new Error('must not read the body as a download');
+        },
+        json: async () => ({ success: false, error: { code: 'AUDIT_EXPORT_TOO_LARGE', message: 'Too large.' } }),
+      }),
+    );
+
+    await expect(apiDownloadCsv('/audit-logs/export')).rejects.toMatchObject({
+      status: 422,
+      code: 'AUDIT_EXPORT_TOO_LARGE',
+    });
   });
 });

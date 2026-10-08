@@ -19,16 +19,23 @@ const PUBLIC_ANNOUNCEMENT_SELECT = {
   linkTarget: true,
 };
 
-async function findAllAnnouncementsAdmin() {
+/**
+ * Phase 2C-7 company scoping for ADMIN management reads. Cross-company
+ * ids read as missing. The public `findCurrentAnnouncement` below
+ * stays global by design until CompanyDomain runtime resolution can
+ * resolve the viewer's company without trusting client input.
+ */
+async function findAllAnnouncementsAdmin(companyId) {
   return prisma.siteAnnouncement.findMany({
+    where: { companyId },
     orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
     select: ANNOUNCEMENT_SELECT,
   });
 }
 
-async function findAnnouncementByIdAdmin(id) {
-  return prisma.siteAnnouncement.findUnique({
-    where: { id },
+async function findAnnouncementByIdAdmin(id, companyId) {
+  return prisma.siteAnnouncement.findFirst({
+    where: { id, companyId },
     select: ANNOUNCEMENT_SELECT,
   });
 }
@@ -44,6 +51,7 @@ async function createAnnouncement(data) {
       linkTarget: data.linkTarget ?? null,
       priority: data.priority ?? 0,
       createdBy: data.createdBy ?? null,
+      companyId: data.companyId ?? null,
     },
     select: ANNOUNCEMENT_SELECT,
   });
@@ -81,10 +89,11 @@ async function deleteAnnouncement(id) {
  * priority first, then newest. Returns null when nothing qualifies —
  * the customer hides the bar instead of falling back to hardcoded copy.
  */
-async function findCurrentAnnouncement(now) {
+async function findCurrentAnnouncement(companyId, now) {
   return prisma.siteAnnouncement.findFirst({
     where: {
       isActive: true,
+      companyId,
       AND: [
         { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
         { OR: [{ expiresAt: null }, { expiresAt: { gte: now } }] },

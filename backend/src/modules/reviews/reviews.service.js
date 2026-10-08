@@ -1,5 +1,6 @@
 const { AppError } = require("../../utils/appError");
 const reviewsRepository = require("./reviews.repository");
+const { findProductById } = require("../products/products.repository");
 const { toSafeReview, toSafeAdminReview, toSafePublicReview } = require("./reviews.utils");
 
 const UPDATABLE_FIELDS = ["rating", "title", "comment"];
@@ -8,9 +9,27 @@ const ADMIN_DEFAULT_PAGE = 1;
 const ADMIN_DEFAULT_LIMIT = 20;
 const ADMIN_MAX_LIMIT = 100;
 
-async function createReview(userId, input) {
-  const orderItem = await reviewsRepository.findOrderItemForReview(input.orderItemId, userId);
+/**
+ * Phase 2C-6 request guard (mirrors the orders service): company-scoped
+ * review operations need the server-resolved companyId.
+ */
+function assertRequestCompany(companyId) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(403, "AUTH_COMPANY_REQUIRED", "Account is not associated with a company");
+  }
+  return companyId;
+}
+
+async function createReview(userId, companyId, input) {
+  assertRequestCompany(companyId);
+  const orderItem = await reviewsRepository.findOrderItemForReview(input.orderItemId, userId, companyId);
   if (!orderItem) {
+    throw new AppError(404, "REVIEW_ORDER_ITEM_NOT_FOUND", "Order item not found");
+  }
+  // The order gate already implies same-company, but the purchased
+  // product is checked explicitly: legacy mixed-company orders must
+  // never mint a cross-company review.
+  if (!orderItem.product || orderItem.product.companyId !== companyId) {
     throw new AppError(404, "REVIEW_ORDER_ITEM_NOT_FOUND", "Order item not found");
   }
 
@@ -76,11 +95,13 @@ async function deleteReview(userId, id) {
   return { id, message: "Review deleted successfully" };
 }
 
-async function listReviewsAdmin(query) {
+async function listReviewsAdmin(companyId, query) {
+  assertRequestCompany(companyId);
   const page = query.page ?? ADMIN_DEFAULT_PAGE;
   const limit = Math.min(query.limit ?? ADMIN_DEFAULT_LIMIT, ADMIN_MAX_LIMIT);
   const search = query.search ? query.search.trim() : "";
   const { rows, total } = await reviewsRepository.findReviewsAdmin({
+    companyId,
     isApproved: query.isApproved === undefined ? null : query.isApproved === "true",
     rating: query.rating ?? null,
     productId: query.productId ?? null,
@@ -102,7 +123,20 @@ async function listReviewsAdmin(query) {
   };
 }
 
-async function listProductReviews(productId) {
+/**
+ * Phase 2C-12 public storefront rule: reviews are product-keyed, so
+ * the product gate (existence + company) runs first. Unknown hosts
+ * fail closed with the product code; a company B product id on a
+ * company A host reads exactly like a missing product.
+ */
+async function listProductReviews(productId, companyId = null) {
+  if (typeof companyId !== "string" || companyId === "") {
+    throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
+  }
+  const product = await findProductById(productId, companyId);
+  if (!product || !product.isActive) {
+    throw new AppError(404, "PRODUCT_NOT_FOUND", "Product not found");
+  }
   const rows = await reviewsRepository.findReviewsByProductId(productId);
   return rows.map(toSafePublicReview);
 }

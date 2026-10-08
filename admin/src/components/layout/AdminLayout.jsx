@@ -4,7 +4,11 @@ import {
   BadgePercent,
   BellRing,
   Boxes,
+  Building2,
+  ChartColumn,
+  FileText,
   FolderTree,
+  History,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -15,52 +19,90 @@ import {
   Star,
   Sun,
   Undo2,
+  UserCog,
   Users,
   X,
   Zap,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useThemeStore } from '../../stores/useThemeStore.js';
+import { ADMIN_PANEL_ROLES } from '../../lib/roles.js';
 import { cn } from '../../lib/cn.js';
 
 /**
  * Admin shell: compact sidebar + top bar + content area. Desktop-first
  * with a slide-in sidebar below `lg`. Navigation lists ONLY implemented
  * sections (Dashboard, Categories, Products, Coupons, Orders, Inventory,
- * Customers, Reviews) — future sections (Media, Settings)
- * join this config as their milestones land. No fake screens.
+ * Customers, Reviews, Audit Logs, Platform Dashboard, Companies) — future
+ * sections join this config as their milestones land. No fake screens.
+ *
+ * Per-item `roles` preserve backend authorization in the navigation:
+ * operational pages stay ADMIN-only except the Phase 4-1 HEAD slice
+ * (Categories, Products, Coupons, Orders, Inventory), which admits
+ * ADMIN + HEAD to match the backend RBAC contract, and the Phase 4-5
+ * MEMBER slice (same pages, read-only for coupons), which admits
+ * ADMIN + HEAD + MEMBER;
+ * Audit Logs / Audit Dashboard admit the four
+ *   common admin-panel roles, matching `GET /audit-logs` (+ `/summary`
+ *   — MEMBER sees self-only numbers, backend-enforced). ADMIN users
+ *   see everything, exactly as before. SUPER_ADMIN-only platform pages
+ *   (`Companies`, `Audit Retention`) live in the System section and are
+ *   hidden from every other role. MEMBER never sees Dashboard, Returns,
+ *   Customers, Reviews, Marketing, Companies, Audit Retention, or Team
+ *   Members (staff management is ADMIN + HEAD only).
  */
+
+const ADMIN_ONLY = Object.freeze(['ADMIN']);
+const SUPER_ADMIN_ONLY = Object.freeze(['SUPER_ADMIN']);
+// Phase 4-5 MEMBER slice (superset of the Phase 4-1 HEAD slice — same
+// pages, coupons read-only for MEMBER via action gates + route split).
+const OPERATIONAL_MEMBER = Object.freeze(['ADMIN', 'HEAD', 'MEMBER']);
+// Phase 4-8 team member management (staff only — never customers):
+// ADMIN manages HEAD/MEMBER, HEAD manages MEMBERs (backend
+// `authorize("ADMIN", "HEAD")` + target guards stay authoritative).
+const TEAM_MANAGERS = Object.freeze(['ADMIN', 'HEAD']);
 
 const NAV_SECTIONS = [
   {
     label: 'Catalog',
     items: [
-      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
-      { to: '/catalog/categories', label: 'Categories', icon: FolderTree, end: false },
-      { to: '/catalog/products', label: 'Products', icon: Package, end: false },
-      { to: '/catalog/coupons', label: 'Coupons', icon: BadgePercent, end: false },
+      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true, roles: ADMIN_ONLY },
+      { to: '/catalog/categories', label: 'Categories', icon: FolderTree, end: false, roles: OPERATIONAL_MEMBER },
+      { to: '/catalog/products', label: 'Products', icon: Package, end: false, roles: OPERATIONAL_MEMBER },
+      { to: '/catalog/coupons', label: 'Coupons', icon: BadgePercent, end: false, roles: OPERATIONAL_MEMBER },
     ],
   },
   {
     label: 'Operations',
     items: [
-      { to: '/orders', label: 'Orders', icon: ShoppingCart, end: false },
-      { to: '/returns', label: 'Return Orders', icon: Undo2, end: false },
-      { to: '/inventory', label: 'Inventory', icon: Boxes, end: false },
+      { to: '/orders', label: 'Orders', icon: ShoppingCart, end: false, roles: OPERATIONAL_MEMBER },
+      { to: '/returns', label: 'Return Orders', icon: Undo2, end: false, roles: ADMIN_ONLY },
+      { to: '/inventory', label: 'Inventory', icon: Boxes, end: false, roles: OPERATIONAL_MEMBER },
+      { to: '/audit-logs', label: 'Audit Logs', icon: FileText, end: false, roles: ADMIN_PANEL_ROLES },
+      { to: '/audit-dashboard', label: 'Audit Dashboard', icon: ChartColumn, end: false, roles: ADMIN_PANEL_ROLES },
     ],
   },
   {
     label: 'People',
     items: [
-      { to: '/customers', label: 'Customers', icon: Users, end: false },
-      { to: '/reviews', label: 'Reviews', icon: Star, end: false },
+      { to: '/team', label: 'Team Members', icon: UserCog, end: false, roles: TEAM_MANAGERS },
+      { to: '/customers', label: 'Customers', icon: Users, end: false, roles: ADMIN_ONLY },
+      { to: '/reviews', label: 'Reviews', icon: Star, end: false, roles: ADMIN_ONLY },
     ],
   },
   {
     label: 'Marketing',
     items: [
-      { to: '/marketing/notifications', label: 'Notifications', icon: Megaphone, end: false },
-      { to: '/marketing/announcements', label: 'Announcements', icon: BellRing, end: false },
+      { to: '/marketing/notifications', label: 'Notifications', icon: Megaphone, end: false, roles: ADMIN_ONLY },
+      { to: '/marketing/announcements', label: 'Announcements', icon: BellRing, end: false, roles: ADMIN_ONLY },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { to: '/platform', label: 'Platform Dashboard', icon: LayoutDashboard, end: true, roles: SUPER_ADMIN_ONLY },
+      { to: '/companies', label: 'Companies', icon: Building2, end: false, roles: SUPER_ADMIN_ONLY },
+      { to: '/audit-retention', label: 'Audit Retention', icon: History, end: false, roles: SUPER_ADMIN_ONLY },
     ],
   },
 ];
@@ -92,40 +134,49 @@ function BrandMark({ onNavigate }) {
 }
 
 function SidebarNav({ onNavigate }) {
+  const roles = useAuthStore((state) => state.user?.roles);
+  const visible = (item) => {
+    const allowed = Array.isArray(item.roles) && item.roles.length > 0 ? item.roles : ADMIN_PANEL_ROLES;
+    return Array.isArray(roles) && roles.some((role) => allowed.includes(role));
+  };
   return (
     <nav aria-label="Admin" className="flex flex-col gap-5">
-      {NAV_SECTIONS.map((section) => (
-        <div key={section.label}>
-          <p className="px-3 pb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-sidebar-muted">
-            {section.label}
-          </p>
-          <ul className="flex flex-col gap-0.5">
-            {section.items.map((item) => {
-              const Icon = item.icon;
-              return (
-                <li key={item.to}>
-                  <NavLink
-                    to={item.to}
-                    end={item.end}
-                    onClick={onNavigate}
-                    className={({ isActive }) =>
-                      cn(
-                        'flex min-h-[44px] items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors duration-200 hover:no-underline',
-                        isActive
-                          ? 'bg-white/10 font-semibold text-sidebar-active'
-                          : 'text-sidebar-muted hover:bg-white/5 hover:text-sidebar-foreground',
-                      )
-                    }
-                  >
-                    <Icon size={18} aria-hidden="true" className="shrink-0" />
-                    {item.label}
-                  </NavLink>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
+      {NAV_SECTIONS.map((section) => {
+        const items = section.items.filter(visible);
+        if (items.length === 0) return null;
+        return (
+          <div key={section.label}>
+            <p className="px-3 pb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-sidebar-muted">
+              {section.label}
+            </p>
+            <ul className="flex flex-col gap-0.5">
+              {items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <li key={item.to}>
+                    <NavLink
+                      to={item.to}
+                      end={item.end}
+                      onClick={onNavigate}
+                      className={({ isActive }) =>
+                        cn(
+                          'flex min-h-[44px] items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors duration-200 hover:no-underline',
+                          isActive
+                            ? 'bg-white/10 font-semibold text-sidebar-active'
+                            : 'text-sidebar-muted hover:bg-white/5 hover:text-sidebar-foreground',
+                        )
+                      }
+                    >
+                      <Icon size={18} aria-hidden="true" className="shrink-0" />
+                      {item.label}
+                    </NavLink>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
     </nav>
   );
 }
@@ -202,8 +253,18 @@ export function AdminLayout() {
           ? 'Inventory'
       : pathname.startsWith('/customers')
         ? 'Customers'
-        : pathname.startsWith('/reviews')
-          ? 'Reviews'
+        : pathname.startsWith('/team')
+          ? 'Team Members'
+          : pathname.startsWith('/reviews')
+            ? 'Reviews'
+          : pathname.startsWith('/audit-logs')
+            ? 'Audit Logs'
+            : pathname.startsWith('/audit-dashboard')
+              ? 'Audit Dashboard'
+            : pathname.startsWith('/audit-retention')
+              ? 'Audit Retention'
+              : pathname.startsWith('/companies')
+                ? 'Companies'
           : pathname.startsWith('/catalog/coupons')
         ? 'Coupons'
         : pathname.startsWith('/catalog/products')

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 
 import app from "../../src/app.js";
+import { stampUserCompany } from "../helpers/userFixtures.js";
 
 /**
  * Mandatory firstName on customer registration (live MySQL):
@@ -27,6 +28,7 @@ describe("registration requires firstName", () => {
     });
     expect(registered.status).toBe(201);
     expect(registered.body.data.user).toMatchObject({ email, firstName: "Aarav" });
+    await stampUserCompany(registered.body.data.user.id);
 
     // Token issuance + refresh-cookie behavior unchanged: login works and
     // sets an HttpOnly refresh cookie.
@@ -89,6 +91,7 @@ describe("registration requires firstName", () => {
     });
     expect(res.status).toBe(201);
     expect(res.body.data.user.firstName).toBe("Aarav");
+    await stampUserCompany(res.body.data.user.id);
   });
 
   it("keeps existing email/password validation intact", async () => {

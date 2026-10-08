@@ -4,8 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CouponsPage } from '../CouponsPage.jsx';
 import { CouponNewPage } from '../CouponNewPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useCouponStore, COUPON_PAGE_SIZE } from '../../stores/useCouponStore.js';
 import { createCoupon, fetchCoupons } from '../../services/coupon.service.js';
+import { fetchProducts } from '../../services/product.service.js';
 
 vi.mock('../../services/coupon.service.js', () => ({
   fetchCoupons: vi.fn(),
@@ -113,5 +115,21 @@ describe('CouponNewPage create flow', () => {
     // No false success: still on the create page, no list navigation.
     expect(screen.getByRole('heading', { name: 'New Coupon' })).toBeInTheDocument();
     expect(createCoupon).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CouponNewPage product eligibility scope', () => {
+  it("loads all products for ADMIN", async () => {
+    useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
+    renderNew();
+    await screen.findByRole('heading', { name: 'New Coupon' });
+    expect(fetchProducts).toHaveBeenCalledWith('all');
+  });
+
+  it("loads active products for HEAD (inactive rows stay out of reach)", async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    renderNew();
+    await screen.findByRole('heading', { name: 'New Coupon' });
+    expect(fetchProducts).toHaveBeenCalledWith('active');
   });
 });

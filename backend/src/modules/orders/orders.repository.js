@@ -2,6 +2,7 @@ const { prisma } = require("../../config/database");
 const { AppError } = require("../../utils/appError");
 const { priceToCents, centsToString } = require("./orders.utils");
 const { tryConsumeUsageTx, recordUsageTx } = require("../coupons/coupons.repository");
+const auditRepository = require("../audit/audit.repository");
 
 const ORDER_ITEM_SELECT = {
   id: true,
@@ -154,31 +155,40 @@ async function findCustomerPhoneById(userId) {
   });
 }
 
-async function findOrdersByUserId(userId) {
+/**
+ * Phase 2C-2 ownership convention: every order read carries the
+ * server-resolved `companyId` and predicates through the authoritative
+ * Order.user → User.companyId relationship IN THE SAME QUERY that
+ * returns the rows. Cross-company ids read as missing (callers map to
+ * 404) — never distinguished, never leaked.
+ */
+async function findOrdersByUserId(userId, companyId) {
   return prisma.order.findMany({
-    where: { userId },
+    where: { userId, user: { companyId } },
     orderBy: { createdAt: "desc" },
     select: ORDER_WITH_DETAILS_SELECT,
   });
 }
 
-async function findOrderByIdAndUserId(id, userId) {
+async function findOrderByIdAndUserId(id, userId, companyId) {
   return prisma.order.findFirst({
-    where: { id, userId },
+    where: { id, userId, user: { companyId } },
     select: ORDER_WITH_DETAILS_SELECT,
   });
 }
 
 /**
  * Admin order list. Every filter is explicit — callers pass a normalized
- * filter object (service layer), never raw query params. No ownership
- * predicate: ADMIN authorization is enforced by route middleware.
+ * filter object (service layer), never raw query params. The company
+ * predicate is always first: an ADMIN sees only their own company's
+ * orders across search, status, payment, city/state, date, pagination,
+ * and sorting. ADMIN authorization itself stays in route middleware.
  */
 async function findOrdersAdmin(filters) {
-  const { status, paymentStatus, search, city, state, fromDate, toDate, sortBy, sortOrder, skip, take } =
+  const { companyId, status, paymentStatus, search, city, state, fromDate, toDate, sortBy, sortOrder, skip, take } =
     filters;
 
-  const and = [];
+  const and = [{ user: { companyId } }];
   if (status) {
     and.push({ status });
   }
@@ -238,9 +248,9 @@ async function findOrdersAdmin(filters) {
   return { rows, total };
 }
 
-async function findOrderByIdAdmin(id) {
-  return prisma.order.findUnique({
-    where: { id },
+async function findOrderByIdAdmin(id, companyId) {
+  return prisma.order.findFirst({
+    where: { id, user: { companyId } },
     select: ADMIN_ORDER_WITH_DETAILS_SELECT,
   });
 }
@@ -259,7 +269,7 @@ function buildOrderNumber(year, sequence) {
   return `ORD-${year}-${String(sequence).padStart(6, "0")}`;
 }
 
-async function createOrderTransaction(userId, orderNumber, shippingAddress, billingAddress, coupon) {
+async function createOrderTransaction(userId, companyId, orderNumber, shippingAddress, billingAddress, coupon) {
   return prisma.$transaction(async (tx) => {
     const cart = await tx.cart.findUnique({
       where: { userId },
@@ -279,9 +289,13 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
                 name: true,
                 price: true,
                 isActive: true,
+                // Tenant ownership, read in the SAME transaction that
+                // consumes the lines below — the check and the consumed
+                // data can never diverge (Phase 2C-1).
+                companyId: true,
                 images: TX_IMAGE_SELECT,
                 product: {
-                  select: { id: true, name: true, isActive: true, images: TX_IMAGE_SELECT },
+                  select: { id: true, name: true, isActive: true, images: TX_IMAGE_SELECT, companyId: true },
                 },
                 inventory: {
                   select: { quantity: true, reservedQuantity: true },
@@ -298,6 +312,17 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
     }
 
     for (const item of cart.items) {
+      // Cross-company lines (e.g. inserted before cart enforcement, or
+      // by direct writes) must never be consumed into an order. Same
+      // failure shape as unknown ids — no existence oracle.
+      if (
+        typeof companyId !== "string" ||
+        companyId === "" ||
+        item.variant.companyId !== companyId ||
+        item.variant.product.companyId !== companyId
+      ) {
+        return { outcome: "cross-company", variantId: item.variantId };
+      }
       if (!item.variant.isActive || !item.variant.product.isActive) {
         return { outcome: "inactive", variantId: item.variantId };
       }
@@ -307,6 +332,21 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
       const available = item.variant.inventory.quantity - item.variant.inventory.reservedQuantity;
       if (item.quantity > available) {
         return { outcome: "insufficient", variantId: item.variantId };
+      }
+    }
+
+    // Coupon company re-read INSIDE this transaction (Phase 2C-6): the
+    // quote-time check lives outside the tx, so the authoritative gate
+    // is repeated here against the same commit boundary that consumes
+    // usage below — no TOCTOU between quote and consumption. A foreign
+    // coupon aborts exactly like a missing one.
+    if (coupon) {
+      const couponRow = await tx.coupon.findUnique({
+        where: { id: coupon.couponId },
+        select: { companyId: true },
+      });
+      if (!couponRow || couponRow.companyId !== companyId) {
+        return { outcome: "cross-company-coupon" };
       }
     }
 
@@ -502,7 +542,7 @@ async function createOrderTransaction(userId, orderNumber, shippingAddress, bill
  * rows can be produced. Orders without a payment record keep that shape
  * (no payment row is invented).
  */
-async function updateOrderStatusTransaction(orderId, expectedStatus, nextStatus, options = {}) {
+async function updateOrderStatusTransaction(orderId, companyId, expectedStatus, nextStatus, options = {}) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({
       where: { id: orderId },
@@ -511,11 +551,18 @@ async function updateOrderStatusTransaction(orderId, expectedStatus, nextStatus,
         userId: true,
         orderNumber: true,
         status: true,
+        user: { select: { companyId: true } },
         items: { select: { variantId: true, quantity: true } },
       },
     });
     if (!order) {
       return { outcome: "missing" };
+    }
+    // Company gate inside the same transaction that mutates below: a
+    // cross-company order reads as missing, so check and write can
+    // never diverge (no TOCTOU between a service pre-read and this tx).
+    if (!order.user || order.user.companyId !== companyId) {
+      return { outcome: "cross-company" };
     }
     if (order.status !== expectedStatus) {
       return { outcome: "conflict", status: order.status };
@@ -593,6 +640,13 @@ async function updateOrderStatusTransaction(orderId, expectedStatus, nextStatus,
       });
     }
 
+    // Phase 2C-17: the pre-validated business audit commits with the
+    // transition it describes (cross-company/conflict paths return
+    // before this point and record nothing).
+    if (options.audit) {
+      await auditRepository.createAuditEvent({ ...options.audit, resourceId: orderId }, tx);
+    }
+
     return { outcome: "ok" };
   });
 }
@@ -614,7 +668,7 @@ async function updateOrderStatusTransaction(orderId, expectedStatus, nextStatus,
  * Any failure (missing order, status conflict, inventory gap) throws and
  * rolls back every order — never partial success reported as success.
  */
-async function bulkUpdateOrderStatusTransaction(orderIds, expectedById, nextStatus, options = {}) {
+async function bulkUpdateOrderStatusTransaction(orderIds, companyId, expectedById, nextStatus, options = {}) {
   return prisma.$transaction(async (tx) => {
     const results = [];
     for (const orderId of orderIds) {
@@ -626,10 +680,17 @@ async function bulkUpdateOrderStatusTransaction(orderIds, expectedById, nextStat
           userId: true,
           orderNumber: true,
           status: true,
+          user: { select: { companyId: true } },
           items: { select: { variantId: true, quantity: true } },
         },
       });
       if (!order) {
+        throw new AppError(404, "ORDER_NOT_FOUND", `Order not found: ${orderId}`);
+      }
+      // Same-transaction company gate per order: only the caller-supplied
+      // id is echoed (never the other company's number or details), so a
+      // mixed batch fails exactly like a batch with unknown ids.
+      if (!order.user || order.user.companyId !== companyId) {
         throw new AppError(404, "ORDER_NOT_FOUND", `Order not found: ${orderId}`);
       }
       if (order.status !== expectedStatus) {
@@ -704,6 +765,12 @@ async function bulkUpdateOrderStatusTransaction(orderIds, expectedById, nextStat
           },
         });
       }
+      // Phase 2C-17: per-order audit inside the all-or-nothing bulk —
+      // any throw above rolls back every audit row with the orders.
+      const audit = options.auditsById ? options.auditsById[orderId] : null;
+      if (audit) {
+        await auditRepository.createAuditEvent({ ...audit, resourceId: orderId }, tx);
+      }
       results.push(orderId);
     }
     return { outcome: "ok", orderIds: results };
@@ -715,12 +782,13 @@ async function bulkUpdateOrderStatusTransaction(orderIds, expectedById, nextStat
  * (checkout creates exactly one COD/PENDING row). Amount/currency are
  * never altered here — status only.
  */
-async function updateOrderPaymentStatusTransaction(orderId, expectedPaymentStatus, nextStatus) {
+async function updateOrderPaymentStatusTransaction(orderId, companyId, expectedPaymentStatus, nextStatus, audit = null) {
   return prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({
       where: { id: orderId },
       select: {
         id: true,
+        user: { select: { companyId: true } },
         payments: {
           orderBy: { createdAt: "desc" },
           select: { id: true, status: true },
@@ -729,6 +797,11 @@ async function updateOrderPaymentStatusTransaction(orderId, expectedPaymentStatu
     });
     if (!order) {
       return { outcome: "missing" };
+    }
+    // Payment rows are only reachable through their order: a
+    // cross-company order reads as missing here too.
+    if (!order.user || order.user.companyId !== companyId) {
+      return { outcome: "cross-company" };
     }
     const latest = order.payments[0];
     if (!latest) {
@@ -749,6 +822,11 @@ async function updateOrderPaymentStatusTransaction(orderId, expectedPaymentStatu
         select: { status: true },
       });
       return { outcome: "conflict", status: fresh ? fresh.status : latest.status };
+    }
+    // Phase 2C-17: the pre-validated payment audit commits with the
+    // transition (all non-ok paths return before this point).
+    if (audit) {
+      await auditRepository.createAuditEvent({ ...audit, resourceId: orderId }, tx);
     }
     return { outcome: "ok" };
   });

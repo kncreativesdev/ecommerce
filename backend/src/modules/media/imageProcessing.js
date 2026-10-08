@@ -6,6 +6,31 @@ const MAX_DIMENSION = 8000;
 const IMAGE_TYPE = "webp";
 const IMAGE_QUALITY = 82;
 
+// Formats the shared pipeline accepts anywhere (multer extension/MIME
+// gate first, Sharp content verification second). SVG and other
+// script-capable/vector formats are never accepted: Sharp would
+// rasterize some of them, so the format is allowlisted explicitly
+// instead of relying on conversion alone.
+const RASTER_FORMATS = new Set(["jpeg", "png", "webp"]);
+
+/**
+ * Rejects non-raster image content (SVG/vectors/unknown) before any
+ * processing or storage. Sharp parses SVG metadata successfully, so
+ * the format allowlist — not mere parseability — is the authority.
+ */
+async function assertRasterImage(buffer) {
+  let metadata;
+  try {
+    metadata = await sharp(buffer).metadata();
+  } catch (err) {
+    throw new AppError(400, "MEDIA_INVALID_TYPE", "File is not a valid image");
+  }
+  if (!metadata || !RASTER_FORMATS.has(metadata.format)) {
+    throw new AppError(400, "MEDIA_INVALID_TYPE", "Only JPEG, PNG, and WebP images are allowed");
+  }
+  return metadata;
+}
+
 /**
  * Shared upload image processing (MEDIA.md §6): content-verify the buffer
  * with Sharp (MIME/extension checks alone are spoofable), enforce the
@@ -32,4 +57,4 @@ async function processToWebp(buffer) {
   }
 }
 
-module.exports = { processToWebp, MAX_DIMENSION, IMAGE_TYPE, IMAGE_QUALITY };
+module.exports = { processToWebp, assertRasterImage, MAX_DIMENSION, IMAGE_TYPE, IMAGE_QUALITY };

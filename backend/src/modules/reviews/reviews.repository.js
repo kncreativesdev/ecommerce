@@ -43,11 +43,18 @@ const ADMIN_REVIEW_WITH_DETAILS_SELECT = {
  * predicate: ADMIN authorization is enforced by route middleware. The
  * embedded user brief carries identity only — never hashes or tokens.
  */
+/**
+ * Phase 2C-6 company scoping: reviews are reached through their
+ * product (`product.companyId` leads the AND chain, so the search OR —
+ * nested in a single AND member — can never escape it). Customer
+ * reads/mutations stay caller-owned (req.user.id is the only key);
+ * public product reviews stay product-keyed and global by design.
+ */
 async function findReviewsAdmin(filters) {
-  const { isApproved, rating, productId, userId, search, sortBy, sortOrder, skip, take } =
+  const { companyId, isApproved, rating, productId, userId, search, sortBy, sortOrder, skip, take } =
     filters;
 
-  const and = [];
+  const and = [{ product: { companyId } }];
   if (isApproved !== null && isApproved !== undefined) {
     and.push({ isApproved });
   }
@@ -96,9 +103,9 @@ async function findReviewByIdAdmin(id) {
   });
 }
 
-async function findOrderItemForReview(orderItemId, userId) {
+async function findOrderItemForReview(orderItemId, userId, companyId) {
   return prisma.orderItem.findFirst({
-    where: { id: orderItemId, order: { userId } },
+    where: { id: orderItemId, order: { userId, user: { companyId } } },
     select: {
       id: true,
       productId: true,
@@ -108,7 +115,7 @@ async function findOrderItemForReview(orderItemId, userId) {
         select: { id: true, userId: true, status: true },
       },
       product: {
-        select: { id: true, name: true, slug: true, isActive: true },
+        select: { id: true, name: true, slug: true, isActive: true, companyId: true },
       },
     },
   });

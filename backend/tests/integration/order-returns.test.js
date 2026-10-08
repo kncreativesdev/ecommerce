@@ -4,6 +4,7 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany } from "../helpers/userFixtures.js";
 
 /**
  * Customer order return requests (live MySQL):
@@ -17,7 +18,8 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTRT${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
 
 const DELIVERY_WALK = [
   "CONFIRMED",
@@ -45,6 +47,7 @@ async function registerCustomer(tag) {
     phone: "9999999999",
   });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   const address = await request(app)
@@ -149,7 +152,7 @@ describe("return request creation", () => {
     expect(body.createdAt).toBeTruthy();
 
     const row = await prisma.returnRequest.findUnique({ where: { orderId: order.id } });
-    expect(row.userId).toBe((await prisma.user.findUnique({ where: { email: customer.email } })).id);
+    expect(row.userId).toBe((await prisma.user.findFirst({ where: { email: customer.email } })).id);
 
     // Initial history row exists.
     const history = await prisma.returnRequestHistory.findMany({ where: { returnRequestId: body.id } });

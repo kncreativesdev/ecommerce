@@ -49,6 +49,10 @@ No other variables are read.
 | `REFRESH_COOKIE_NAME`      | Refresh-token cookie name                | No       | `refresh_token`           |
 | `REFRESH_COOKIE_SAMESITE`  | Cookie SameSite policy                   | No       | `lax`                     |
 | `REFRESH_COOKIE_SECURE`    | Cookie Secure flag                       | No       | `true`                    |
+| `BOOTSTRAP_SUPER_ADMIN_ENABLED` | One-time first-SUPER_ADMIN gate     | No       | `false`                   |
+| `BOOTSTRAP_SUPER_ADMIN_EMAIL` | Bootstrap account email               | Only for the bootstrap run | supplied per run |
+| `BOOTSTRAP_SUPER_ADMIN_PASSWORD` | Bootstrap account password (8–128) | Only for the bootstrap run | supplied per run |
+| `BOOTSTRAP_SUPER_ADMIN_ALLOW_PRODUCTION` | Explicit production-run authorization | Only for production runs | `false` |
 
 Rules:
 
@@ -208,7 +212,58 @@ documented):
   deactivation; cart stock pre-checks are advisory; no stock reservation
   system exists; a crash between DB and file deletion can orphan an upload.
 
-## 13. Source-of-truth references
+## 13. First SUPER_ADMIN provisioning (one-time bootstrap)
+
+The application never creates a SUPER_ADMIN by itself: there is no
+bootstrap HTTP endpoint and nothing runs on server startup. After a
+fresh deployment, provision exactly one platform SUPER_ADMIN with the
+operator CLI before anyone logs into the Admin frontend:
+
+`npm run bootstrap:super-admin` (`scripts/bootstrap-super-admin.js`,
+`provisionSuperAdmin` in `src/modules/users/users.service.js`).
+
+Local development:
+
+1. Set `BOOTSTRAP_SUPER_ADMIN_ENABLED=true` in `.env` (never commit
+   real credentials) alongside the operator-chosen
+   `BOOTSTRAP_SUPER_ADMIN_EMAIL` / `BOOTSTRAP_SUPER_ADMIN_PASSWORD`
+   (password 8–128 characters, same policy as registration).
+2. Run `npm run bootstrap:super-admin` once from `backend/`.
+3. Sign in to the Admin frontend with that account via the normal
+   `POST /api/v1/auth/login` flow, then create companies, register
+   company domains (e.g. `localhost` via Companies → Domains), and
+   create company ADMIN accounts through the existing application.
+4. Disable the gate afterwards (`BOOTSTRAP_SUPER_ADMIN_ENABLED=false`).
+
+Production:
+
+1. Deploy, then apply migrations (`npx prisma migrate deploy`).
+2. Supply the three bootstrap variables through the deployment
+   environment/secret manager (never in source control), plus the
+   separate explicit authorization
+   `BOOTSTRAP_SUPER_ADMIN_ALLOW_PRODUCTION=true` — without it, the
+   command refuses to run under `NODE_ENV=production`.
+3. Run the command once, verify the success output, then sign in to
+   the deployed Admin frontend and continue with company/ADMIN setup.
+4. Rotate or remove the bootstrap authorization afterwards.
+
+Safety properties (enforced by the command, not by convention):
+
+- Refuses unless the enable gate is exactly `true`; no defaults, no
+  fallback credentials, nothing printed resembling a secret (no
+  password, hash, token, or database credential in output or logs).
+- Unknown email → creates one platform-scoped SUPER_ADMIN
+  (`companyId: null`, single `SUPER_ADMIN` role, Argon2id hash),
+  audited in-transaction (`USER`/`CREATED`, safe metadata only).
+  Creates no Company, CompanyDomain, ADMIN, or CUSTOMER.
+- Already-existing active SUPER_ADMIN email → idempotent success with
+  no changes (no duplicate, no password rotation).
+- Email held by any other role mix → refused without elevation;
+  inactive holder (any role) → refused without reactivation.
+- Existing `POST /auth/login` and SUPER_ADMIN authorization behavior
+  are unchanged; the provisioned account signs in normally.
+
+## 14. Source-of-truth references
 
 - `AGENTS.md`
 - `docs/ARCHITECTURE.md`

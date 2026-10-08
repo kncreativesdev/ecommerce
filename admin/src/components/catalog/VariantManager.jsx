@@ -8,6 +8,7 @@ import { EmptyState } from '../ui/EmptyState.jsx';
 import { Modal } from '../ui/Modal.jsx';
 import { VariantForm } from './VariantForm.jsx';
 import { VariantMediaSection } from './VariantMediaSection.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { formatINR } from '../../lib/format.js';
 import { cn } from '../../lib/cn.js';
 import {
@@ -23,7 +24,7 @@ import {
  * Contract notes (verified `products.*` backend):
  * - `DELETE /products/:productId/variants/:variantId` SOFT-DEACTIVATES
  *   (`isActive=false`) — the UI says "Deactivate", never "Delete".
- * - The admin product detail payload (`GET /products/:id?status=all`)
+ * - The admin product detail payload (`GET /products/admin/:id?status=all`)
  *   embeds ALL variants, so lifecycle filtering is client-side over this
  *   authoritative list — no separate variant endpoint exists or is needed.
  * - Reactivate is the documented partial update
@@ -50,6 +51,11 @@ const VARIANT_COLUMNS = [
 ];
 
 export function VariantManager({ product, onChanged }) {
+  // Variants inherit the product permission namespace: MEMBER holds
+  // CREATE/READ/UPDATE only (no DEACTIVATE grant) — create/edit stay,
+  // deactivate/reactivate hide. HEAD keeps lifecycle (ADMIN/HEAD route).
+  const isMember = useAuthStore((state) => state.isMember());
+  const canLifecycleVariant = !isMember;
   const [modal, setModal] = useState(null); // null | { mode: 'create' } | { mode: 'edit', variant }
   const [deactivating, setDeactivating] = useState(null); // variant | null
   const [mutating, setMutating] = useState(false);
@@ -235,7 +241,8 @@ export function VariantManager({ product, onChanged }) {
                   >
                     <Pencil size={16} aria-hidden="true" />
                   </button>
-                  {variant.isActive !== false ? (
+                  {canLifecycleVariant ? (
+                    variant.isActive !== false ? (
                     <button
                       type="button"
                       onClick={() => setDeactivating(variant)}
@@ -256,7 +263,8 @@ export function VariantManager({ product, onChanged }) {
                     >
                       <RotateCcw size={16} aria-hidden="true" />
                     </button>
-                  )}
+                    )
+                  ) : null}
                 </span>
               </td>
             </tr>
@@ -308,3 +316,4 @@ export function VariantManager({ product, onChanged }) {
     </div>
   );
 }
+

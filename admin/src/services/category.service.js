@@ -4,12 +4,13 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm } from '../lib/apiCli
  * Admin taxonomy API access — DOCUMENTED category endpoints only
  * (verified: `categories.routes|controller|service`, API_CONTRACT_MATRIX):
  *
- * - `GET /categories` (public default) → bare array, ACTIVE ONLY.
- *   `?status=active|inactive|all` selects the scope; `inactive`/`all`
- *   require ADMIN (else 401/403), invalid values → `422`. Reactivation is
- *   `PATCH { isActive: true }` — there is no dedicated restore endpoint.
- * - `GET /categories/:id` → `{ category }`; `?status=all` (ADMIN) reads
- *   inactive rows; otherwise `404 CATEGORY_NOT_FOUND`.
+ * - `GET /categories/admin` (ADMIN/HEAD/MEMBER, identity company) → bare
+ *   array, ACTIVE ONLY by default. `?status=active|inactive|all` selects
+ *   the scope; `inactive`/`all` require ADMIN (else 401/403), invalid
+ *   values → `422`. Company-scoped operational reads — never the public
+ *   Host-based `GET /categories` (that serves the storefront company).
+ * - `GET /categories/admin/:id` → `{ category }`; `?status=all` (ADMIN)
+ *   reads inactive rows; otherwise `404 CATEGORY_NOT_FOUND`.
  * - `POST /categories` (ADMIN) → `201 { category }`. Writable:
  *   `name*` (1–150), `slug?` (≤180, auto-derived from name when omitted),
  *   `description?` (nullable), `image?` (≤500, nullable),
@@ -37,12 +38,12 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm } from '../lib/apiCli
  */
 export function fetchCategories(status = 'active') {
   const query = status && status !== 'active' ? `?status=${encodeURIComponent(status)}` : '';
-  return apiGet(`/categories${query}`);
+  return apiGet(`/categories/admin${query}`);
 }
 
 export function fetchCategoryById(id, scope = 'active') {
   const query = scope && scope !== 'active' ? `?status=${encodeURIComponent(scope)}` : '';
-  return apiGet(`/categories/${id}${query}`).then((data) => data?.category ?? null);
+  return apiGet(`/categories/admin/${id}${query}`).then((data) => data?.category ?? null);
 }
 
 export function createCategory(payload) {

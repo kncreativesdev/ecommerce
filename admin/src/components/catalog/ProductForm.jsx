@@ -8,6 +8,7 @@ import { Checkbox, Field, Input, Textarea } from '../ui/Field.jsx';
 import { TaxonomySelectors } from './TaxonomySelectors.jsx';
 import { PendingProductImages } from './PendingProductImages.jsx';
 import { findCategoryById, getSubcategories } from '../../utils/taxonomy.js';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { applyServerErrors } from '../../utils/serverErrors.js';
 
 /**
@@ -145,6 +146,13 @@ function validateVariantEntries(entries) {
 
 export function ProductForm({ initialValue = null, categories = [], onSubmit, submitting = false, mediaProgress = null }) {
   const isEdit = Boolean(initialValue?.id);
+  // Active toggle is ADMIN-only (backend 403s HEAD there); Featured
+  // stays visible (part of UPDATE for all staff roles). Hidden toggle
+  // submits the default/existing active value — except MEMBER, where any
+  // explicit `isActive` on PATCH is a 403 (no DEACTIVATE grant), so the
+  // field is omitted entirely (create defaults active server-side).
+  const isAdmin = useAuthStore((state) => state.isAdmin());
+  const isMember = useAuthStore((state) => state.isMember());
   // Taxonomy selection lives in local state (not RHF `watch`, which the
   // compiler lint flags): validity is guaranteed by the dependent options
   // and re-checked manually on submit.
@@ -297,7 +305,7 @@ export function ProductForm({ initialValue = null, categories = [], onSubmit, su
         {
           parentCategoryId,
           subcategoryId: subcategoryId || '',
-          fields: values,
+          fields: isMember ? { ...values, isActive: undefined } : values,
           variants,
         },
         // Second arg mirrors the CategoryForm imageAction pattern: pending
@@ -517,7 +525,9 @@ export function ProductForm({ initialValue = null, categories = [], onSubmit, su
 
       <section aria-label="Visibility" className="flex flex-col gap-1 rounded-xl border border-border bg-card p-5 shadow-sm">
         <h3 className="text-sm font-bold uppercase tracking-wide text-foreground">Visibility</h3>
-        <Checkbox label="Active (visible in storefront)" {...register('isActive')} />
+        {isAdmin ? (
+          <Checkbox label="Active (visible in storefront)" {...register('isActive')} />
+        ) : null}
         <Checkbox label="Featured (eligible for curated rails)" {...register('isFeatured')} />
       </section>
 

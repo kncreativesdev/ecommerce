@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { toast } from 'sonner';
 import { OrdersPage } from '../OrdersPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useOrderStore, ORDER_PAGE_SIZE } from '../../stores/useOrderStore.js';
 import { fetchOrdersAdmin, bulkUpdateOrderStatus } from '../../services/order.service.js';
 
@@ -138,5 +139,31 @@ describe('Admin bulk selection + combined status update', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument();
     expect(toast.error).toHaveBeenCalled();
     expect(fetchOrdersAdmin).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('OrdersPage HEAD bulk access', () => {
+  it('offers the same bulk bar and applies the transition for HEAD', async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    fetchOrdersAdmin.mockResolvedValue({
+      orders: [
+        orderFixture({ id: 'o1', orderNumber: 'ORD-1', status: 'PENDING' }),
+        orderFixture({ id: 'o2', orderNumber: 'ORD-2', status: 'PENDING' }),
+      ],
+      pagination: { page: 1, limit: ORDER_PAGE_SIZE, total: 2, totalPages: 1 },
+    });
+    bulkUpdateOrderStatus.mockResolvedValue([{ id: 'o1' }, { id: 'o2' }]);
+    renderOrders();
+    await screen.findByText('ORD-1');
+
+    await user.click(screen.getByLabelText('Select order ORD-1'));
+    await user.click(screen.getByLabelText('Select order ORD-2'));
+    expect(await screen.findByText('2 orders selected')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Bulk status target'), 'CONFIRMED');
+    await user.click(screen.getByRole('button', { name: 'Apply to selected' }));
+    expect(bulkUpdateOrderStatus).toHaveBeenCalledWith(['o1', 'o2'], 'CONFIRMED');
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/2 orders/i));
   });
 });

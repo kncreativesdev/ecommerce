@@ -6,6 +6,7 @@ import { ImagePlus, X } from 'lucide-react';
 import { Button } from '../ui/Button.jsx';
 import { Checkbox, Field, Input, Select, Textarea } from '../ui/Field.jsx';
 import { getForbiddenParentIds, getParentCategories } from '../../utils/taxonomy.js';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { applyServerErrors } from '../../utils/serverErrors.js';
 import {
   MEDIA_ALLOWED_MIME_TYPES,
@@ -54,6 +55,13 @@ const categorySchema = z.object({
 
 export function CategoryForm({ initialValue = null, categories = [], onSubmit, submitting = false, serverError = null }) {
   const isEdit = Boolean(initialValue?.id);
+  // Active toggle is ADMIN-only (backend 403s HEAD there); HEAD always
+  // submits the default/existing value instead. MEMBER holds no
+  // DEACTIVATE grant: any explicit `isActive` on PATCH is a 403, so the
+  // field is omitted entirely for MEMBER (create defaults active,
+  // update touches no active state).
+  const isAdmin = useAuthStore((state) => state.isAdmin());
+  const isMember = useAuthStore((state) => state.isMember());
   const forbidden = getForbiddenParentIds(categories, initialValue?.id);
   const parents = getParentCategories(categories).filter((category) => !forbidden.includes(category.id));
   const existingImage = typeof initialValue?.image === 'string' ? initialValue.image : '';
@@ -98,7 +106,7 @@ export function CategoryForm({ initialValue = null, categories = [], onSubmit, s
       image: removeRequested ? null : (values.image?.trim() ? values.image.trim() : null),
       parentId: values.parentId && values.parentId !== '' ? values.parentId : null,
       sortOrder: values.sortOrder,
-      isActive: values.isActive,
+      ...(isMember ? {} : { isActive: values.isActive }),
     };
     // A chosen file wins over any text reference: the caller uploads it
     // after the record exists and the endpoint sets `image` to the stored
@@ -307,7 +315,10 @@ export function CategoryForm({ initialValue = null, categories = [], onSubmit, s
         ) : null}
       </fieldset>
 
-      <Checkbox label="Active (visible in storefront)" {...register('isActive')} />
+      {isAdmin ? (
+        <Checkbox label="Active (visible in storefront)" {...register('isActive')} />
+      ) : null}
+
 
       {errors.root?.message || serverError ? (
         <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-sm font-medium text-destructive">

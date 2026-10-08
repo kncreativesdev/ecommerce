@@ -28,7 +28,7 @@ function parseDetailScope(query) {
 
 async function list(req, res, next) {
   try {
-    const products = await productsService.listProducts(parseListStatus(req.query));
+    const products = await productsService.listProducts(parseListStatus(req.query), companyIdOf(req));
     return res.status(200).json({ success: true, data: products });
   } catch (err) {
     return next(err);
@@ -37,17 +37,34 @@ async function list(req, res, next) {
 
 async function getById(req, res, next) {
   try {
-    const product = await productsService.getProduct(req.params.id, parseDetailScope(req.query));
+    const product = await productsService.getProduct(req.params.id, parseDetailScope(req.query), companyIdOf(req));
     return res.status(200).json({ success: true, data: { product } });
   } catch (err) {
     return next(err);
   }
 }
 
+/**
+ * Server-resolved tenant for catalog writes. The mounted companyContext
+ * guarantees the value (or rejects the request first); a missing value
+ * fails closed inside the service. Variant creation inherits the parent
+ * product's company inside the service (never the request).
+ */
+function companyIdOf(req) {
+  return req.companyContext && typeof req.companyContext.companyId === "string"
+    ? req.companyContext.companyId
+    : null;
+}
+
 async function create(req, res, next) {
   try {
     const input = createProductSchema.parse(req.body);
-    const product = await productsService.createProduct(input);
+    // Roles ride along for the Phase 3-2 active-state guard (ADMIN +
+    // HEAD may write `isActive`; MEMBER may not). Snapshots use id.
+    const product = await productsService.createProduct(companyIdOf(req), input, {
+      id: req.user.id,
+      roles: req.user.roles,
+    });
     return res.status(201).json({ success: true, data: { product } });
   } catch (err) {
     return next(err);
@@ -57,7 +74,10 @@ async function create(req, res, next) {
 async function update(req, res, next) {
   try {
     const input = updateProductSchema.parse(req.body);
-    const product = await productsService.updateProduct(req.params.id, input);
+    const product = await productsService.updateProduct(req.params.id, companyIdOf(req), input, {
+      id: req.user.id,
+      roles: req.user.roles,
+    });
     return res.status(200).json({ success: true, data: { product } });
   } catch (err) {
     return next(err);
@@ -66,7 +86,7 @@ async function update(req, res, next) {
 
 async function remove(req, res, next) {
   try {
-    const product = await productsService.deactivateProduct(req.params.id);
+    const product = await productsService.deactivateProduct(req.params.id, companyIdOf(req), { id: req.user.id });
     return res.status(200).json({ success: true, data: { product } });
   } catch (err) {
     return next(err);
@@ -76,7 +96,12 @@ async function remove(req, res, next) {
 async function createVariant(req, res, next) {
   try {
     const input = createVariantSchema.parse(req.body);
-    const variant = await productsService.createVariant(req.params.productId, input);
+    // Roles ride along for the Phase 3-3 active-state guard (ADMIN +
+    // HEAD may write `isActive`; MEMBER may not). Snapshots use id.
+    const variant = await productsService.createVariant(req.params.productId, companyIdOf(req), input, {
+      id: req.user.id,
+      roles: req.user.roles,
+    });
     return res.status(201).json({ success: true, data: { variant } });
   } catch (err) {
     return next(err);
@@ -89,7 +114,9 @@ async function updateVariant(req, res, next) {
     const variant = await productsService.updateVariant(
       req.params.productId,
       req.params.variantId,
-      input
+      companyIdOf(req),
+      input,
+      { id: req.user.id, roles: req.user.roles }
     );
     return res.status(200).json({ success: true, data: { variant } });
   } catch (err) {
@@ -99,7 +126,9 @@ async function updateVariant(req, res, next) {
 
 async function removeVariant(req, res, next) {
   try {
-    const variant = await productsService.deactivateVariant(req.params.productId, req.params.variantId);
+    const variant = await productsService.deactivateVariant(req.params.productId, req.params.variantId, companyIdOf(req), {
+      id: req.user.id,
+    });
     return res.status(200).json({ success: true, data: { variant } });
   } catch (err) {
     return next(err);

@@ -1,5 +1,6 @@
 const { prisma } = require("../../config/database");
 const { MAX_INT32 } = require("./inventory.validation");
+const auditRepository = require("../audit/audit.repository");
 
 const INVENTORY_SELECT = {
   id: true,
@@ -17,7 +18,7 @@ async function findByVariantId(variantId) {
   });
 }
 
-async function initializeWithLedger(variantId, quantity, note) {
+async function initializeWithLedger(variantId, quantity, note, audit = null) {
   return prisma.$transaction(async (tx) => {
     const record = await tx.inventory.create({
       data: { variantId, quantity },
@@ -32,11 +33,16 @@ async function initializeWithLedger(variantId, quantity, note) {
         note: note ?? null,
       },
     });
+    // Phase 2C-17: the pre-validated business-operation audit commits
+    // with the ledger rows it describes.
+    if (audit) {
+      await auditRepository.createAuditEvent({ ...audit, resourceId: record.id }, tx);
+    }
     return record;
   });
 }
 
-async function adjustWithLedger(variantId, delta, entry) {
+async function adjustWithLedger(variantId, delta, entry, audit = null) {
   return prisma.$transaction(async (tx) => {
     const current = await tx.inventory.findUnique({
       where: { variantId },
@@ -81,6 +87,12 @@ async function adjustWithLedger(variantId, delta, entry) {
       where: { variantId },
       select: INVENTORY_SELECT,
     });
+    // Phase 2C-17: same-transaction business audit (only reached on the
+    // ok path — missing/insufficient/overflow return before this point
+    // and record nothing).
+    if (audit) {
+      await auditRepository.createAuditEvent({ ...audit, resourceId: record.id }, tx);
+    }
     return { outcome: "ok", record };
   });
 }
@@ -103,10 +115,13 @@ const TRANSACTION_SELECT = {
  * no user input ever reaches SQL as an identifier.
  */
 async function findInventoryAdmin(filters) {
-  const { search, stock, active, sortBy, sortOrder, skip, take } = filters;
+  const { companyId, search, stock, active, sortBy, sortOrder, skip, take } = filters;
 
-  const conditions = [];
-  const params = [];
+  // Phase 2C-3 company boundary on the variant's denormalized tenant
+  // column (bound parameter, never interpolated). Leads every filter
+  // combination, so search/stock/active/sort can never escape it.
+  const conditions = ["v.company_id = ?"];
+  const params = [companyId];
   if (search) {
     // Escape LIKE wildcards so the search is a literal substring match
     // (Prisma `contains` escapes the same way for the orders admin list).

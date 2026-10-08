@@ -4,6 +4,7 @@ import request from "supertest";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany } from "../helpers/userFixtures.js";
 
 /**
  * Customer order self-cancellation (POST /orders/:id/cancel):
@@ -18,7 +19,8 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTCC${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
 
 const ctx = {
   categoryId: null,
@@ -38,6 +40,7 @@ async function registerCustomer(firstName) {
     .post("/api/v1/auth/register")
     .send({ email, password: "TestPass123!", firstName, lastName: "Tester", phone: "9999999999" });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   return loggedIn.body.data.accessToken;

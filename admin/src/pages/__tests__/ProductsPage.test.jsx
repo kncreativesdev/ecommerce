@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { toast } from 'sonner';
 import { ProductsPage } from '../ProductsPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { useProductStore } from '../../stores/useProductStore.js';
 import { useCategoryStore } from '../../stores/useCategoryStore.js';
 import { fetchProductImages } from '../../services/media.service.js';
@@ -56,6 +57,7 @@ const PRODUCT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
   useProductStore.setState({ products: [], status: 'idle', error: null, scope: 'active' });
   useCategoryStore.setState({ categories: [], status: 'idle', error: null, scope: 'active' });
   fetchProductImages.mockResolvedValue([
@@ -235,5 +237,30 @@ describe('ProductsPage header refresh', () => {
     renderPage();
 
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
+  });
+});
+
+describe('ProductsPage HEAD role gating', () => {
+  it('hides hard delete and the status filter but keeps create/edit/deactivate', async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    useProductStore.setState({ products: [{ ...PRODUCT, isActive: true }], status: 'success', error: null });
+    renderPage();
+    await screen.findByText('Boom Speaker');
+
+    expect(screen.getByRole('link', { name: 'Add Product' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Edit Boom Speaker' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deactivate Boom Speaker' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Delete Boom Speaker/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Product status filter' })).not.toBeInTheDocument();
+  });
+
+  it('shows Reactivate (no Delete) for an inactive product', async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    useProductStore.setState({ products: [{ ...PRODUCT, isActive: false }], status: 'success', error: null });
+    renderPage();
+    await screen.findByText('Boom Speaker');
+
+    expect(screen.getByRole('button', { name: 'Reactivate Boom Speaker' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Delete Boom Speaker/ })).not.toBeInTheDocument();
   });
 });

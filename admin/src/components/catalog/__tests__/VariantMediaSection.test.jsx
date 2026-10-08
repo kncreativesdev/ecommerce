@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VariantMediaSection } from '../VariantMediaSection.jsx';
+import { useAuthStore } from '../../../stores/useAuthStore.js';
 import {
   deleteProductImage,
   fetchProductImages,
@@ -48,6 +49,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   URL.createObjectURL = vi.fn(() => 'blob:mock');
   URL.revokeObjectURL = vi.fn();
+  // Default to ADMIN so the pre-existing gallery/upload/primary/delete
+  // tests keep exercising the authorized path.
+  useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
 });
 
 describe('VariantMediaSection', () => {
@@ -118,5 +122,41 @@ describe('VariantMediaSection', () => {
   it('renders nothing without variants', () => {
     const { container } = render(<VariantMediaSection productId="p1" variants={[]} />);
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe('VariantMediaSection delete role gating (Phase 4-6)', () => {
+  it('shows the image Delete control to ADMIN', async () => {
+    useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
+    fetchProductImages.mockResolvedValue([imageFixture()]);
+    render(<VariantMediaSection productId="p1" variants={VARIANTS} />);
+
+    await screen.findByText('a1.webp');
+    expect(screen.getByRole('button', { name: 'Delete image a1.webp' })).toBeInTheDocument();
+  });
+
+  it('hides Delete for HEAD but keeps upload, primary, and sort controls', async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    fetchProductImages.mockResolvedValue([imageFixture({ isPrimary: false })]);
+    render(<VariantMediaSection productId="p1" variants={VARIANTS} />);
+
+    await screen.findByText('a1.webp');
+    expect(screen.queryByRole('button', { name: 'Delete image a1.webp' })).not.toBeInTheDocument();
+    // All other authorized HEAD media operations stay available (upload is
+    // a file input inside its label, not a button).
+    expect(screen.getByLabelText('Add images to variant SKU-A')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark image as primary for variant SKU-A' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Sort order for image a1.webp')).toBeInTheDocument();
+  });
+
+  it('hides Delete for MEMBER but keeps upload and metadata controls', async () => {
+    useAuthStore.setState({ user: { id: 'm1', email: 'member@example.test', roles: ['MEMBER'] } });
+    fetchProductImages.mockResolvedValue([imageFixture({ isPrimary: false })]);
+    render(<VariantMediaSection productId="p1" variants={VARIANTS} />);
+
+    await screen.findByText('a1.webp');
+    expect(screen.queryByRole('button', { name: 'Delete image a1.webp' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Add images to variant SKU-A')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark image as primary for variant SKU-A' })).toBeInTheDocument();
   });
 });

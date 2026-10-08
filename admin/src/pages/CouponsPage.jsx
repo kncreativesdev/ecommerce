@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { History, Pencil, Plus, Power, RotateCcw, Search, TicketPercent, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCouponStore } from '../stores/useCouponStore.js';
+import { useAuthStore } from '../stores/useAuthStore.js';
 import { CouponHistory } from '../components/catalog/CouponHistory.jsx';
 import {
   COUPON_SCOPES,
@@ -26,7 +27,8 @@ import { cn } from '../lib/cn.js';
 
 /**
  * Coupon Management (`/catalog/coupons`): real backend data only, via
- * ADMIN-only `GET /coupons`. Scope (All/Active/Inactive), search
+ * company `GET /coupons` (ADMIN full scope, HEAD/MEMBER scoped reads).
+ * Scope (All/Active/Inactive), search
  * (code/description), and pagination are SERVER-driven — every control
  * maps to a documented query param; the store refetches on change.
  *
@@ -56,6 +58,14 @@ function validitySummary(coupon) {
 }
 
 export function CouponsPage() {
+  // Hard delete stays ADMIN-only (backend 403s HEAD there) — hide the
+  // control for non-ADMIN callers; create/edit/deactivate/reactivate
+  // and history follow the shared HEAD contract. MEMBER holds
+  // coupon:READ only — every write control hides (create/edit/
+  // deactivate/reactivate/delete); list/detail/history stay.
+  const isAdmin = useAuthStore((state) => state.isAdmin());
+  const isMember = useAuthStore((state) => state.isMember());
+  const canWriteCoupon = !isMember;
   const coupons = useCouponStore((state) => state.coupons);
   const pagination = useCouponStore((state) => state.pagination);
   const scope = useCouponStore((state) => state.scope);
@@ -173,6 +183,7 @@ export function CouponsPage() {
             <Button variant="secondary" size="sm" onClick={() => refreshCoupons()} disabled={controlsDisabled}>
               Refresh
             </Button>
+            {canWriteCoupon ? (
             <Link
               to="/catalog/coupons/new"
               className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 hover:no-underline"
@@ -180,6 +191,7 @@ export function CouponsPage() {
               <Plus size={17} aria-hidden="true" />
               Add Coupon
             </Link>
+            ) : null}
           </>
         }
       />
@@ -295,6 +307,7 @@ export function CouponsPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <span className="inline-flex items-center justify-end gap-1">
+                      {canWriteCoupon ? (
                       <Link
                         to={`/catalog/coupons/${coupon.id}/edit`}
                         aria-label={`Edit coupon ${coupon.code}`}
@@ -303,6 +316,7 @@ export function CouponsPage() {
                       >
                         <Pencil size={17} aria-hidden="true" />
                       </Link>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => setHistoryCoupon(coupon)}
@@ -312,7 +326,8 @@ export function CouponsPage() {
                       >
                         <History size={17} aria-hidden="true" />
                       </button>
-                      {coupon.isActive ? (
+                      {canWriteCoupon ? (
+                        coupon.isActive ? (
                         <button
                           type="button"
                           onClick={() => setDeactivating(coupon)}
@@ -333,7 +348,9 @@ export function CouponsPage() {
                         >
                           <RotateCcw size={17} aria-hidden="true" />
                         </button>
-                      )}
+                        )
+                      ) : null}
+                      {isAdmin ? (
                       <button
                         type="button"
                         onClick={() => setDeleting(coupon)}
@@ -343,6 +360,7 @@ export function CouponsPage() {
                       >
                         <Trash2 size={17} aria-hidden="true" />
                       </button>
+                      ) : null}
                     </span>
                   </td>
                 </tr>

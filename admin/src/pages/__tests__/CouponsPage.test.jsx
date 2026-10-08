@@ -3,6 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { CouponsPage } from '../CouponsPage.jsx';
+import { useAuthStore } from '../../stores/useAuthStore.js';
 import { CouponNewPage } from '../CouponNewPage.jsx';
 import { useCouponStore, COUPON_PAGE_SIZE } from '../../stores/useCouponStore.js';
 import { deactivateCoupon, deleteCoupon, fetchCoupons, fetchCouponHistory } from '../../services/coupon.service.js';
@@ -390,5 +391,34 @@ describe('CouponsPage header refresh', () => {
     expect(fetchCoupons).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: 'all' }),
     );
+  });
+});
+
+describe('CouponsPage HEAD role gating', () => {
+  it('hides hard delete but keeps create/edit/deactivate/history', async () => {
+    useAuthStore.setState({ user: { id: 'h1', email: 'head@example.test', roles: ['HEAD'] } });
+    fetchCoupons.mockResolvedValue({
+      coupons: [couponFixture()],
+      pagination: { page: 1, limit: COUPON_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderCoupons();
+    await screen.findByText('SAVE10');
+
+    expect(screen.getByRole('link', { name: 'Add Coupon' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deactivate coupon SAVE10' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View coupon history for SAVE10' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete coupon SAVE10' })).not.toBeInTheDocument();
+  });
+
+  it('shows hard delete to ADMIN', async () => {
+    useAuthStore.setState({ user: { id: 'a1', email: 'admin@example.test', roles: ['ADMIN'] } });
+    fetchCoupons.mockResolvedValue({
+      coupons: [couponFixture()],
+      pagination: { page: 1, limit: COUPON_PAGE_SIZE, total: 1, totalPages: 1 },
+    });
+    renderCoupons();
+    await screen.findByText('SAVE10');
+
+    expect(screen.getByRole('button', { name: 'Delete coupon SAVE10' })).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import sharp from "sharp";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, COMPANY_ONE_ID } from "../helpers/userFixtures.js";
 
 /**
  * Product-level single-primary invariant (live MySQL):
@@ -15,7 +16,15 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTPI${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
+
+// Phase 2C-26: public reads fail closed on unregistered hosts, so the
+// image-list assertions below resolve Company #1 through an explicit
+// RUN-unique test domain (removed in afterAll) instead of ambient
+// localhost state. Company #1 itself stays read-only.
+const PUBLIC_HOST = `${RUN.toLowerCase()}-public.example.test`;
+let publicDomainId = null;
 
 const ctx = {
   categoryId: null,
@@ -47,7 +56,7 @@ async function uploadImage(productId, buffer, meta = {}) {
 }
 
 async function listImages(productId) {
-  const res = await request(app).get(`/api/v1/products/${productId}/images`);
+  const res = await request(app).get(`/api/v1/products/${productId}/images`).set("Host", PUBLIC_HOST);
   expect(res.status).toBe(200);
   return res.body.data;
 }
@@ -103,9 +112,17 @@ beforeAll(async () => {
   const otherImg = await uploadImage(ctx.otherProductId, await pngBuffer(), { isPrimary: "true" });
   expect(otherImg.status).toBe(201);
   ctx.otherImage = otherImg.body.data.image;
+
+  const publicDomain = await prisma.companyDomain.create({
+    data: { companyId: COMPANY_ONE_ID, domain: PUBLIC_HOST, isPrimary: false, isActive: true },
+  });
+  publicDomainId = publicDomain.id;
 }, 90000);
 
 afterAll(async () => {
+  if (publicDomainId) {
+    await prisma.companyDomain.deleteMany({ where: { id: publicDomainId } });
+  }
   try {
     for (const imageId of [ctx.imageA1?.id, ctx.imageA2?.id, ctx.imageB1?.id, ctx.imageP1?.id].filter(Boolean)) {
       const current = await listImages(ctx.productId).catch(() => []);

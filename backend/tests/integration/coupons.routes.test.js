@@ -1,17 +1,38 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeAll } from "vitest";
 import request from "supertest";
 import { randomUUID } from "crypto";
 
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { companyOneAdminId, stampUserCompany } from "../helpers/userFixtures.js";
 
-function tokenFor(roles) {
-  return signAccessToken({ id: randomUUID(), roles });
-}
+// Company-aware identities (Phase 2B-2): claim-only random UUIDs would
+// fail closed at the mounted company boundary, so ADMIN uses Company
+// #1's provisioned ADMIN and CUSTOMER uses a real stamped user. The
+// unauthenticated (no-token) cases below stay untouched on purpose.
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const ADMIN_HEADERS = () => ({
+  Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}`,
+});
 
-const ADMIN_HEADERS = () => ({ Authorization: `Bearer ${tokenFor(["ADMIN"])}` });
-const CUSTOMER_HEADERS = () => ({ Authorization: `Bearer ${tokenFor(["CUSTOMER"])}` });
+const ctx = { customerId: null };
+const CUSTOMER_HEADERS = () => ({
+  Authorization: `Bearer ${signAccessToken({ id: ctx.customerId, roles: ["CUSTOMER"] })}`,
+});
+
+beforeAll(async () => {
+  const email = `tstcouponsroutes-${Date.now().toString(36)}@example.test`;
+  const registered = await request(app).post("/api/v1/auth/register").send({
+    email,
+    password: "TestPass123!",
+    firstName: "Coupons",
+    lastName: "Customer",
+  });
+  expect(registered.status).toBe(201);
+  ctx.customerId = registered.body.data.user.id;
+  await stampUserCompany(ctx.customerId);
+});
 
 function uniqueCode() {
   return `TST-${Date.now().toString(36).toUpperCase()}${Math.floor(Math.random() * 1296)

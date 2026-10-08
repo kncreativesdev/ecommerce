@@ -19,6 +19,9 @@ const reviewsRoutes = require("../modules/reviews/reviews.routes");
 const couponsRoutes = require("../modules/coupons/coupons.routes");
 const dashboardRoutes = require("../modules/dashboard/dashboard.routes");
 const inventoryAdminRoutes = require("../modules/inventory/inventory.admin.routes");
+const companiesRoutes = require("../modules/companies/companies.routes");
+const auditRoutes = require("../modules/audit/audit.routes");
+const retentionRoutes = require("../modules/audit/retention.routes");
 
 const router = express.Router();
 
@@ -54,5 +57,14 @@ router.use("/reviews", reviewsRoutes);
 router.use("/coupons", couponsRoutes);
 router.use("/dashboard", dashboardRoutes);
 router.use("/inventory", inventoryAdminRoutes);
+// Super Admin company lifecycle/provisioning (platform context only;
+// never company operational data). See companies.routes.js.
+router.use("/companies", companiesRoutes);
+// Audit-log reads (role-scoped, server-side visibility predicates).
+// See audit.routes.js. No UI, export, retention, or deletion here.
+router.use("/audit-logs", auditRoutes);
+// Global audit retention policy (SUPER_ADMIN platform configuration).
+// See retention.routes.js. No manual deletion, no per-company policy.
+router.use("/audit-retention", retentionRoutes);
 
 module.exports = router;

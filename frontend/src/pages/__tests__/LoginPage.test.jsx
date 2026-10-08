@@ -45,6 +45,54 @@ describe('LoginPage password visibility', () => {
   });
 });
 
+describe('LoginPage company suspension (Phase F1)', () => {
+  async function submitAs(email, password, login) {
+    const user = userEvent.setup();
+    useAuthStore.mockImplementation((selector) => selector({
+      login,
+      accessToken: null,
+      status: 'ready',
+    }));
+    renderLogin();
+    await user.type(await screen.findByPlaceholderText('you@example.com'), email);
+    await user.type(screen.getByPlaceholderText('Your password'), password);
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+  }
+
+  it('shows the dedicated suspension message for 403 COMPANY_SUSPENDED', async () => {
+    const login = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { code: 'COMPANY_SUSPENDED', status: 403, message: 'Company operations are unavailable while the company is suspended' },
+    });
+    await submitAs('buyer@example.test', 'password123', login);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/currently unavailable.*suspended.*signing in again will not restore access/i);
+    expect(screen.queryByText(/incorrect email or password/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/account is disabled/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/COMPANY_SUSPENDED/)).not.toBeInTheDocument();
+  });
+
+  it('keeps invalid credentials on the existing invalid-credential message', async () => {
+    const login = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { code: 'AUTH_INVALID_CREDENTIALS', status: 401, message: 'Invalid email or password' },
+    });
+    await submitAs('buyer@example.test', 'wrongpassword', login);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/incorrect email or password/i);
+  });
+
+  it('keeps an ordinary 403 on the existing disabled-account message', async () => {
+    const login = vi.fn().mockResolvedValue({
+      ok: false,
+      error: { code: 'AUTH_ACCOUNT_INACTIVE', status: 403, message: 'Account is inactive' },
+    });
+    await submitAs('buyer@example.test', 'password123', login);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/account is disabled/i);
+  });
+});
+
 describe('LoginPage Google sign-in (temporarily hidden)', () => {
   it('does not display any Google authentication option', async () => {
     renderLogin();

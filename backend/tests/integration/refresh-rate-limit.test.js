@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import request from "supertest";
 
 import app from "../../src/app.js";
+import { stampUserCompany } from "../helpers/userFixtures.js";
 
 /**
  * Refresh limiter cap (live app, isolated worker → isolated in-memory
@@ -10,7 +11,9 @@ import app from "../../src/app.js";
  *
  * The refresh limiter counts every attempt (success or failure):
  * AUTH_RATE_LIMIT_MAX=30 → attempts 1..30 return 200, the 31st 429s, so
- * a refresh storm cannot run forever.
+ * a refresh storm cannot run forever. Each attempt follows rotation
+ * (one-time tokens): the fresh cookie from each success feeds the
+ * next attempt.
  */
 
 describe("refresh rate limiter", () => {
@@ -20,13 +23,14 @@ describe("refresh rate limiter", () => {
       .post("/api/v1/auth/register")
       .send({ email, password: "TestPass123!", firstName: "Budget", lastName: "Probe" });
     expect(registered.status).toBe(201);
+    await stampUserCompany(registered.body.data.user.id);
     const loggedIn = await request(app)
       .post("/api/v1/auth/login")
       .send({ email, password: "TestPass123!" });
     expect(loggedIn.status).toBe(200);
     const cookie = (loggedIn.headers["set-cookie"] || []).find((c) => c.startsWith("refresh_token="));
     expect(cookie).toMatch(/^refresh_token=.+/);
-    const jar = cookie.split(";")[0];
+    let jar = cookie.split(";")[0];
 
     let last = null;
     for (let attempt = 1; attempt <= 31; attempt += 1) {
@@ -34,6 +38,11 @@ describe("refresh rate limiter", () => {
       last = await request(app).post("/api/v1/auth/refresh").set("Cookie", jar);
       if (attempt <= 30) {
         expect(last.status).toBe(200);
+        // One-time rotation: each success issues a fresh cookie that
+        // feeds the next attempt; replaying `jar` would 401 instead.
+        const rotated = (last.headers["set-cookie"] || []).find((c) => c.startsWith("refresh_token="));
+        expect(rotated).toMatch(/^refresh_token=.+/);
+        jar = rotated.split(";")[0];
       }
     }
     expect(last.status).toBe(429);

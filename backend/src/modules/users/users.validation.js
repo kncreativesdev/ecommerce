@@ -38,9 +38,46 @@ const updateUserActiveSchema = z
   })
   .strict();
 
+/**
+ * Phase 2C-31 HEAD/MEMBER management contracts. The route company id
+ * owns every operation — `companyId` is never accepted in the body
+ * (strict schemas reject it), and manageable roles are allowlisted
+ * (role escalation to ADMIN/HEAD/SUPER_ADMIN/CUSTOMER is rejected
+ * outright, never coerced). Email/password/name/phone conventions
+ * mirror the provisioning primitive (`provisionEmployee`).
+ */
+const createEmployeeSchema = z
+  .object({
+    email: z.string().trim().toLowerCase().email().max(255),
+    password: z.string().min(8).max(128),
+    firstName: z.string().trim().min(1, "First name is required.").max(100),
+    lastName: z.string().trim().min(1).max(100).optional(),
+    phone: z.string().trim().min(1).max(30).optional(),
+    role: z.enum(["HEAD", "MEMBER"]),
+  })
+  .strict();
+
+/**
+ * Manager-driven MEMBER profile update. Identity fields stay out by
+ * design: no `email` (deferred §AK.9), no `password` (dedicated
+ * flows only), no `role`/`companyId`/`isActive` (provisioning and
+ * lifecycle endpoints own those). Nullable semantics mirror the
+ * self-service `updateProfileSchema`; emptiness is rejected by the
+ * service with `USER_UPDATE_INVALID` like the self path.
+ */
+const updateMemberProfileSchema = z
+  .object({
+    firstName: z.string().trim().min(1).max(100).nullable().optional(),
+    lastName: z.string().trim().min(1).max(100).nullable().optional(),
+    phone: z.string().trim().min(1).max(30).nullable().optional(),
+  })
+  .strict();
+
 module.exports = {
   updateProfileSchema,
   userIdParamSchema,
   adminUserListQuerySchema,
   updateUserActiveSchema,
+  createEmployeeSchema,
+  updateMemberProfileSchema,
 };

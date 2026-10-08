@@ -1,17 +1,21 @@
 /**
  * Tech Pulse catalog seed.
  *
- * BACKEND SEED DATA ONLY. Uses the existing Prisma schema exactly as-is
- * (no new fields, no new relations). Safe to run repeatedly: every record
- * is keyed by a deterministic unique field (role name, category slug,
- * product slug, variant SKU) and written with upsert / find-or-create.
- * Existing unrelated data is never deleted or modified, except that product
- * and variant rows matching the seed's own slugs/SKUs are updated in place.
+ * BACKEND SEED DATA ONLY. Safe to run repeatedly: every record is keyed
+ * by a deterministic unique field (role name; company-scoped category
+ * slug, product slug, variant SKU) and written with upsert /
+ * find-or-create. Legacy catalog belongs to Company #1 (ensured by id,
+ * never recreated). Existing unrelated data is never deleted or
+ * modified, except that product and variant rows matching the seed's
+ * own company-scoped slugs/SKUs are updated in place (including their
+ * Company #1 stamp, which also repairs any pre-stamping NULL rows).
  *
  * What this seeds:
  * - roles: CUSTOMER, ADMIN (upsert by name; harmless if already present)
- * - 8 categories (upsert by slug)
- * - 13 products (upsert by slug), each with 1-2 variants (upsert by SKU)
+ * - Company #1 ensured (pre-existing Tech Pulse store)
+ * - 8 categories (upsert by company + slug, stamped Company #1)
+ * - 13 products (upsert by company + slug), each with 1-2 variants
+ *   (upsert by company + SKU), all stamped Company #1
  * - 1 inventory row per variant (created once) + 1 INITIAL_STOCK ledger row
  *
  * What this deliberately does NOT seed:
@@ -404,16 +408,34 @@ async function seedRoles() {
   }
 }
 
-async function seedCategories() {
+/**
+ * Phase 2C-10 company stamping: legacy/default catalog belongs to
+ * Company #1 (the pre-existing Tech Pulse store). The company row is
+ * ensured idempotently by its fixed Phase 1 UUID — never recreated,
+ * never renamed.
+ */
+const COMPANY_ONE_ID = "35b5a215-0cf3-42db-ba42-6fac6656a708";
+
+async function ensureCompanyOne() {
+  await prisma.company.upsert({
+    where: { id: COMPANY_ONE_ID },
+    update: {},
+    create: { id: COMPANY_ONE_ID, name: "Tech Pulse", status: "ACTIVE" },
+  });
+  return COMPANY_ONE_ID;
+}
+
+async function seedCategories(companyId) {
   const bySlug = {};
   for (const c of CATEGORIES) {
     const record = await prisma.category.upsert({
-      where: { slug: c.slug },
+      where: { companyId_slug: { companyId, slug: c.slug } },
       update: {
         name: c.name,
         description: c.description,
         isActive: true,
         sortOrder: c.sortOrder,
+        companyId,
       },
       create: {
         name: c.name,
@@ -421,6 +443,7 @@ async function seedCategories() {
         description: c.description,
         isActive: true,
         sortOrder: c.sortOrder,
+        companyId,
       },
     });
     bySlug[c.slug] = record;
@@ -428,7 +451,7 @@ async function seedCategories() {
   return bySlug;
 }
 
-async function seedProducts(categoriesBySlug) {
+async function seedProducts(companyId, categoriesBySlug) {
   let variantCount = 0;
   let inventoryCreated = 0;
 
@@ -439,7 +462,7 @@ async function seedProducts(categoriesBySlug) {
     }
 
     const product = await prisma.product.upsert({
-      where: { slug: p.slug },
+      where: { companyId_slug: { companyId, slug: p.slug } },
       update: {
         categoryId: category.id,
         name: p.name,
@@ -448,6 +471,7 @@ async function seedProducts(categoriesBySlug) {
         brand: BRAND,
         isActive: true,
         isFeatured: p.isFeatured,
+        companyId,
       },
       create: {
         categoryId: category.id,
@@ -458,12 +482,13 @@ async function seedProducts(categoriesBySlug) {
         brand: BRAND,
         isActive: true,
         isFeatured: p.isFeatured,
+        companyId,
       },
     });
 
     for (const v of p.variants) {
       const variant = await prisma.productVariant.upsert({
-        where: { sku: v.sku },
+        where: { companyId_sku: { companyId, sku: v.sku } },
         update: {
           productId: product.id,
           name: v.name,
@@ -472,6 +497,7 @@ async function seedProducts(categoriesBySlug) {
           barcode: v.barcode,
           weight: v.weight,
           isActive: true,
+          companyId,
         },
         create: {
           productId: product.id,
@@ -482,6 +508,7 @@ async function seedProducts(categoriesBySlug) {
           barcode: v.barcode,
           weight: v.weight,
           isActive: true,
+          companyId,
         },
       });
       variantCount += 1;
@@ -520,8 +547,9 @@ async function seedProducts(categoriesBySlug) {
 
 async function main() {
   await seedRoles();
-  const categoriesBySlug = await seedCategories();
-  const { variantCount, inventoryCreated } = await seedProducts(categoriesBySlug);
+  const companyId = await ensureCompanyOne();
+  const categoriesBySlug = await seedCategories(companyId);
+  const { variantCount, inventoryCreated } = await seedProducts(companyId, categoriesBySlug);
 
   const [categoryCount, productCount, inventoryCount, ledgerCount] =
     await Promise.all([

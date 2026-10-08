@@ -1,4 +1,5 @@
 const { prisma } = require("../../config/database");
+const auditRepository = require("../audit/audit.repository");
 
 const RETURN_SELECT = {
   id: true,
@@ -16,9 +17,9 @@ const RETURN_SELECT = {
  * orders are both null (callers map to 404 ORDER_NOT_FOUND, never
  * distinguished) — the same ownership convention as order detail reads.
  */
-async function findOrderForReturn(orderId, userId) {
+async function findOrderForReturn(orderId, userId, companyId) {
   return prisma.order.findFirst({
-    where: { id: orderId, userId },
+    where: { id: orderId, userId, user: { companyId } },
     select: { id: true, userId: true, status: true, orderNumber: true },
   });
 }
@@ -53,8 +54,10 @@ const ADMIN_RETURN_DETAIL_SELECT = {
  * query params. No ownership predicate: ADMIN authorization is enforced
  * by route middleware. Newest requests first.
  */
-async function findReturnsAdmin({ status, search, skip, take }) {
-  const and = [];
+async function findReturnsAdmin({ companyId, status, search, skip, take }) {
+  // Company boundary through the return's owning customer (the return
+  // user is always the order user by creation rule). Phase 2C-2.
+  const and = [{ user: { companyId } }];
   if (status) {
     and.push({ status });
   }
@@ -82,9 +85,9 @@ async function findReturnsAdmin({ status, search, skip, take }) {
   return { rows, total };
 }
 
-async function findReturnByIdAdmin(id) {
-  return prisma.returnRequest.findUnique({
-    where: { id },
+async function findReturnByIdAdmin(id, companyId) {
+  return prisma.returnRequest.findFirst({
+    where: { id, user: { companyId } },
     select: ADMIN_RETURN_DETAIL_SELECT,
   });
 }
@@ -97,7 +100,7 @@ async function findReturnByIdAdmin(id) {
  * exactly one winner. Never touches Order.status, OrderStatusHistory,
  * payments, or inventory.
  */
-async function createReturnTx({ orderId, userId, orderNumber, reason, details }) {
+async function createReturnTx({ orderId, userId, orderNumber, reason, details, auditLog = null }) {
   try {
     const row = await prisma.$transaction(async (tx) => {
       const created = await tx.returnRequest.create({
@@ -118,6 +121,12 @@ async function createReturnTx({ orderId, userId, orderNumber, reason, details })
         },
         select: { id: true },
       });
+      // Phase 2C-17: the pre-validated creation audit commits with the
+      // request it describes (duplicate-race P2002 rolls everything
+      // back, audit included).
+      if (auditLog) {
+        await auditRepository.createAuditEvent({ ...auditLog, resourceId: created.id }, tx);
+      }
       return tx.returnRequest.findUniqueOrThrow({
         where: { id: created.id },
         select: RETURN_SELECT,

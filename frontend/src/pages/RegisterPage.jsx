@@ -7,6 +7,7 @@ import { Container } from '../components/ui/Container.jsx';
 import { FormField, TextInput } from '../components/ui/FormField.jsx';
 import { registerSchema } from '../schemas/auth.schema.js';
 import { zodResolver, applyServerErrors } from '../lib/formValidation.js';
+import { COMPANY_SUSPENDED_CODE, SUSPENSION_SIGNIN_MESSAGE } from '../lib/suspension.js';
 import { useAuthStore } from '../stores/useAuthStore.js';
 
 function safeRedirect(value) {
@@ -58,7 +59,9 @@ export function RegisterPage() {
       return;
     }
     const error = result.error;
-    if (error?.code === 'AUTH_EMAIL_ALREADY_EXISTS' || error?.status === 409) {
+    if (error?.code === COMPANY_SUSPENDED_CODE) {
+      setError('root', { type: 'server', message: SUSPENSION_SIGNIN_MESSAGE });
+    } else if (error?.code === 'AUTH_EMAIL_ALREADY_EXISTS' || error?.status === 409) {
       setError('email', { type: 'server', message: 'An account with this email already exists.' });
     } else if (error?.status === 429) {
       setError('root', { type: 'server', message: 'Too many attempts. Please wait a moment and try again.' });

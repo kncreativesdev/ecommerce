@@ -5,6 +5,8 @@ import sharp from "sharp";
 import app from "../../src/app.js";
 import { signAccessToken } from "../../src/utils/jwt.js";
 import { prisma } from "../../src/config/database.js";
+import { hashPassword } from "../../src/modules/auth/auth.utils.js";
+import { companyOneAdminId, stampUserCompany } from "../helpers/userFixtures.js";
 
 /**
  * Admin user + review administration (live MySQL):
@@ -24,7 +26,8 @@ import { prisma } from "../../src/config/database.js";
  */
 
 const RUN = `TSTUR${Date.now().toString(36).toUpperCase()}`;
-const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: "admin-test", roles: ["ADMIN"] })}` });
+const COMPANY_ONE_ADMIN_ID = await companyOneAdminId();
+const adminHeaders = () => ({ Authorization: `Bearer ${signAccessToken({ id: COMPANY_ONE_ADMIN_ID, roles: ["ADMIN"] })}` });
 
 const ctx = {
   categoryId: null,
@@ -53,6 +56,7 @@ async function registerAndLogin(firstName) {
     phone: "9999999999",
   });
   expect(registered.status).toBe(201);
+  await stampUserCompany(registered.body.data.user.id);
   const loggedIn = await request(app).post("/api/v1/auth/login").send({ email, password: "TestPass123!" });
   expect(loggedIn.status).toBe(200);
   return { email, token: loggedIn.body.data.accessToken, id: loggedIn.body.data.user.id };
@@ -266,6 +270,79 @@ describe("admin user lifecycle", () => {
       .send({ isActive: false });
     expect(missing.status).toBe(404);
     expect(missing.body.error.code).toBe("USER_NOT_FOUND");
+  });
+
+  it("rejects sole-ADMIN self-deactivation without touching the row or audit", async () => {
+    // Dedicated company (never Company #1): exactly one ADMIN exists,
+    // so the designated ADMIN target is always the caller.
+    const tag = `${RUN.toLowerCase()}-selfban`;
+    const company = await prisma.company.create({ data: { name: `${RUN} Selfban Co` } });
+    const admin = await prisma.user.create({
+      data: {
+        email: `${tag}-admin@example.test`,
+        passwordHash: await hashPassword("TestPass123!"),
+        firstName: "Self",
+        lastName: "Ban",
+        companyId: company.id,
+      },
+    });
+    let adminRole = await prisma.role.findUnique({ where: { name: "ADMIN" } });
+    if (!adminRole) {
+      adminRole = await prisma.role.create({ data: { name: "ADMIN" } });
+    }
+    await prisma.userRole.create({ data: { userId: admin.id, roleId: adminRole.id } });
+    await prisma.company.update({ where: { id: company.id }, data: { adminUserId: admin.id } });
+    let memberRole = await prisma.role.findUnique({ where: { name: "MEMBER" } });
+    if (!memberRole) {
+      memberRole = await prisma.role.create({ data: { name: "MEMBER" } });
+    }
+    const member = await prisma.user.create({
+      data: {
+        email: `${tag}-member@example.test`,
+        passwordHash: await hashPassword("TestPass123!"),
+        firstName: "Peer",
+        lastName: "Member",
+        companyId: company.id,
+      },
+    });
+    await prisma.userRole.create({ data: { userId: member.id, roleId: memberRole.id } });
+    const headers = { Authorization: `Bearer ${signAccessToken({ id: admin.id, roles: ["ADMIN"] })}` };
+
+    try {
+      // Self-deactivation is rejected: the row stays active and no
+      // DEACTIVATED audit event is recorded (failures emit nothing).
+      const selfBan = await request(app).patch(`/api/v1/users/${admin.id}`).set(headers).send({ isActive: false });
+      expect(selfBan.status).toBe(409);
+      expect(selfBan.body.error.code).toBe("USER_SELF_DEACTIVATION");
+      expect((await prisma.user.findUnique({ where: { id: admin.id } })).isActive).toBe(true);
+      expect(
+        await prisma.auditLog.count({ where: { resource: "USER", resourceId: admin.id, action: "DEACTIVATED" } })
+      ).toBe(0);
+
+      // Self-reactivation stays allowed (live-token repair path).
+      const selfRepair = await request(app).patch(`/api/v1/users/${admin.id}`).set(headers).send({ isActive: true });
+      expect(selfRepair.status).toBe(200);
+      expect(selfRepair.body.data.user.isActive).toBe(true);
+
+      // Non-self deactivation is unaffected.
+      const banned = await request(app).patch(`/api/v1/users/${member.id}`).set(headers).send({ isActive: false });
+      expect(banned.status).toBe(200);
+      expect(banned.body.data.user).toMatchObject({ id: member.id, isActive: false });
+      const restored = await request(app).patch(`/api/v1/users/${member.id}`).set(headers).send({ isActive: true });
+      expect(restored.status).toBe(200);
+      expect(restored.body.data.user.isActive).toBe(true);
+    } finally {
+      await prisma.auditLog.deleteMany({
+        where: {
+          OR: [
+            { resourceId: { in: [company.id, admin.id, member.id] } },
+            { actorId: { in: [admin.id, member.id] } },
+          ],
+        },
+      });
+      await prisma.user.deleteMany({ where: { id: { in: [admin.id, member.id] } } });
+      await prisma.company.deleteMany({ where: { id: company.id } });
+    }
   });
 });
 

@@ -5,6 +5,8 @@ import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Eye, EyeOff, LogIn, Zap } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore.js';
+import { isAdminPanelUser } from '../lib/roles.js';
+import { landingFor } from '../lib/loginLanding.js';
 import { Button } from '../components/ui/Button.jsx';
 import { Field, Input } from '../components/ui/Field.jsx';
 
@@ -13,17 +15,17 @@ const loginSchema = z.object({
   password: z.string().min(1, 'Password is required.').max(256),
 });
 
-function safeRedirect(value) {
-  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
-    ? value
-    : '/dashboard';
-}
-
 /**
- * Admin sign-in. Documented `POST /auth/login` only; the store enforces
- * the ADMIN role post-login (non-admin accounts are signed straight back
- * out — backend `authorize("ADMIN")` remains authoritative). Rate-limit
- * friendly: submit disables while pending; `429` surfaces as backoff copy.
+ * Admin sign-in. Documented `POST /auth/login` only; the store admits
+ * the four common admin-panel roles post-login (CUSTOMER and unknown
+ * roles are signed straight back out — backend authorization remains
+ * authoritative). Rate-limit friendly: submit disables while pending;
+ * `429` surfaces as backoff copy.
+ *
+ * Landing rule (loop-free by construction — see `lib/loginLanding.js`):
+ * the target is always derived from the freshly authenticated user,
+ * never from the pre-login render closure (which still sees
+ * `user === null` at submit time).
  */
 export function LoginPage() {
   const [searchParams] = useSearchParams();
@@ -32,8 +34,7 @@ export function LoginPage() {
   const user = useAuthStore((state) => state.user);
   const login = useAuthStore((state) => state.login);
 
-  const isAdmin = Array.isArray(user?.roles) && user.roles.includes('ADMIN');
-  const redirectTo = safeRedirect(searchParams.get('redirect'));
+  const redirectTo = landingFor(user, searchParams.get('redirect'));
   const [showPassword, setShowPassword] = useState(false);
 
   const {
@@ -50,7 +51,7 @@ export function LoginPage() {
     document.title = 'Sign in — Tech Pulse Admin';
   }, []);
 
-  if (status === 'ready' && isAdmin) {
+  if (status === 'ready' && isAdminPanelUser(user)) {
     return <Navigate to={redirectTo} replace />;
   }
 
@@ -72,7 +73,11 @@ export function LoginPage() {
       setError('root', { message });
       return;
     }
-    navigate(redirectTo, { replace: true });
+    // Re-derive the landing from the authenticated user: `redirectTo`
+    // above was captured while `user` was still null (which always
+    // resolves to `/audit-logs`). Navigating with it would strand even
+    // ADMIN logins on the audit page.
+    navigate(landingFor(useAuthStore.getState().user, searchParams.get('redirect')), { replace: true });
   });
 
   return (
@@ -95,7 +100,7 @@ export function LoginPage() {
 
         <h1 className="mb-1 text-xl font-bold tracking-tight text-foreground">Sign in</h1>
         <p className="mb-5 text-sm text-muted-foreground">
-          Admin accounts only. Customer accounts cannot access this panel.
+          Staff accounts only. Customer accounts cannot access this panel.
         </p>
 
         <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
