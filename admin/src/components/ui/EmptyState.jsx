@@ -6,7 +6,7 @@ export function EmptyState({ icon: Icon, title, message, actionTo, actionLabel, 
   return (
     <div
       className={cn(
-        'mx-auto flex max-w-md flex-col items-center gap-3 rounded-xl border border-border bg-card px-6 py-10 text-center shadow-sm',
+        'mx-auto flex max-w-md flex-col items-center gap-3 rounded-xl border border-border bg-card px-5 py-8 text-center shadow-sm',
         className,
       )}
     >

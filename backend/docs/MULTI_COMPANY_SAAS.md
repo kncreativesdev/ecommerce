@@ -5246,4 +5246,5 @@ Phase 2C-34 status is COMPLETE: every refresh token carries a MySQL-backed sessi
 
 - New auth-refresh-rotation suite (persist shape with no raw token, rotate and replay, per-user isolation, logout revoke, expiry, deactivation, 10-way exactly-once race, suspension gate).
 - Updated auth-refresh-concurrency (same-cookie race now asserts exactly one win), refresh-rate-limit (follows rotation; 30 successes then 429 preserved), suspension-enforcement (sessionless tokens fail closed with legacy gating order).
+- Focused hardening suites, 12/12 passing: `tests/unit/auth-refresh-db-failure.test.js` (repository failures propagate — no false rotation or revocation, outage never masquerades as 401) and `tests/integration/auth-refresh-hardening.test.js` (expired/malformed/empty/access-as-refresh/unknown/revoked shapes plus the literal two-consumer exactly-once race). Only these two files were run in this verification; the full backend suite was not re-run here.
 - Full backend suite green; prisma migrate status up to date with no drift; no frontend changes (cookie contract unchanged).

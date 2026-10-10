@@ -140,7 +140,7 @@ function SidebarNav({ onNavigate }) {
     return Array.isArray(roles) && roles.some((role) => allowed.includes(role));
   };
   return (
-    <nav aria-label="Admin" className="flex flex-col gap-5">
+    <nav aria-label="Admin" className="flex flex-col gap-4">
       {NAV_SECTIONS.map((section) => {
         const items = section.items.filter(visible);
         if (items.length === 0) return null;
@@ -295,7 +295,7 @@ export function AdminLayout() {
         id="admin-sidebar"
         aria-label="Admin sidebar"
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col gap-6 bg-sidebar px-4 py-5 text-sidebar-foreground transition-transform duration-200 lg:sticky lg:top-0 lg:h-svh lg:translate-x-0 lg:visible',
+          'fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col gap-5 bg-sidebar px-4 py-5 text-sidebar-foreground transition-transform duration-200 lg:sticky lg:top-0 lg:h-svh lg:translate-x-0 lg:visible',
           sidebarOpen ? 'visible translate-x-0' : 'invisible -translate-x-full',
         )}
       >
@@ -347,8 +347,8 @@ export function AdminLayout() {
           </div>
         </header>
 
-        <main id="admin-content" className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          <div className="mx-auto w-full max-w-6xl">
+        <main id="admin-content" className="min-w-0 flex-1 px-3 py-4 sm:px-4 lg:px-6">
+          <div className="mx-auto w-full max-w-7xl">
             <Outlet />
           </div>
         </main>

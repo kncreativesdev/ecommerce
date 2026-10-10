@@ -1417,9 +1417,10 @@ milestone created the concrete business requirement. Likewise
 (see §26F), `companies`/`company_domains` (see §26G), and
 `audit_logs`/`audit_retention_policy` (see §26H) are implemented
 and documented in their sections — they are no longer future items.
+Likewise `refresh_tokens` is now implemented as `refresh_sessions`
+(see §26I) — it is no longer a future item.
 
 ```text
-refresh_tokens
 product_options
 product_option_values
 refunds
@@ -1717,6 +1718,42 @@ Rules:
 
 ---
 
+# 26I. Refresh Sessions (one-time refresh-token rotation)
+
+```text
+refresh_sessions
+----------------
+id
+user_id → users.id (CASCADE on delete and update)
+jti_hash (unique: SHA-256 of the refresh token `jti`)
+expires_at
+revoked_at (nullable; set on consumption or logout)
+created_at
+```
+
+Rules:
+
+* One row per issued refresh token, created at issuance (login,
+  Google sign-in, refresh, password change). Only the SHA-256 hash of
+  the token's `jti` is stored — never the raw token, which is useless
+  without the server signing secret.
+* Refresh consumption is a single conditional update matching `jti`
+  hash, owner, unrevoked, and unexpired rows: exactly one concurrent
+  consumer wins and the winner's successor session is minted; losers
+  get the neutral invalid-token error and the old token stays dead.
+* Logout revokes the presented row idempotently instead of only
+  clearing the cookie; missing or already-revoked rows still answer
+  success.
+* Expired rows are pruned per user at issuance (bounded, indexed);
+  the global expired sweep rides the existing retention tick (single
+  indexed range delete, error-tolerant). Revoked rows die by expiry;
+  replay of a missing row answers identically.
+* Migration `20261008090706_phase2c34_refresh_sessions`. Rows cascade
+  with the user and survive process restarts (MySQL-backed). No
+  secrets, password material, or raw tokens anywhere in this table.
+
+---
+
 # 27. Database Change Policy
 
 Before changing the schema:
@@ -1803,7 +1840,7 @@ with its own section above): `order_status_history` (§26A),
 `coupon_histories` (§17.4), `return_requests` +
 `return_request_histories` (§26E), `password_otps` (§26F),
 `companies` + `company_domains` (§26G), `audit_logs` +
-`audit_retention_policy` (§26H).
+`audit_retention_policy` (§26H), `refresh_sessions` (§26I).
 
 No `admin` table/module is required.
 

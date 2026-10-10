@@ -125,17 +125,31 @@ Available:
 
 - Access tokens are short-lived (default 15 minutes); refresh tokens are
   long-lived (default 7 days) with unique `jti` values and rotate on use.
+- Every refresh token has a MySQL-backed `refresh_sessions` row keyed by
+  SHA-256 of its `jti` (never the raw token). Refresh consumes the row
+  with one conditional update, so concurrent uses of one token produce
+  exactly one success; the winner's successor session is minted and the
+  old token stays dead. Logout revokes the presented row (idempotent)
+  instead of only clearing the cookie.
 - Refresh lives in an `HttpOnly` cookie (`Secure` in production,
   `SameSite` configurable); logout clears it.
+- Migration `20261008090706_phase2c34_refresh_sessions` must be applied
+  before deploying this code: without the table, login/refresh/logout
+  fail with `500`s, never with false success.
+- During a database outage, login/refresh/logout answer `500`
+  `INTERNAL_SERVER_ERROR` (never tokens, never a false logout success,
+  and never `401 AUTH_REFRESH_TOKEN_INVALID` for a well-formed token):
+  classify these as environment/database failures, not invalid tokens.
 - Login and refresh are blocked for deactivated accounts.
 
 Known accepted limitation:
 
 - An already-issued access token stays cryptographically valid until its
-  short expiry even after account deactivation. This is inherent to
-  stateless JWTs at the configured lifetimes, not a defect. If immediate
-  revocation is ever required, it needs a future server-side session or
-  denylist design.
+  short expiry even after account deactivation or logout. Refresh
+  sessions are already server-side (consumed/revoked rows reject at the
+  next refresh); only access tokens remain stateless. If immediate
+  access-token revocation is ever required, it needs a future denylist
+  design.
 
 ## 7. Rate-limit diagnosis
 
@@ -199,7 +213,8 @@ Recommended (future work, not implemented):
 - No `uncaughtException`/`unhandledRejection` handling exists; the
   platform supervisor owns restarts.
 - Rate limiting is per-instance memory only.
-- Token revocation before expiry does not exist (see section 6).
+- Token revocation before expiry does not exist for access tokens
+  (refresh sessions revoke server-side; see section 6).
 - Crash-window orphan upload files are possible (see section 8).
 - Migration rollback is backup-restore only.
 
@@ -212,7 +227,10 @@ Recommended (future work, not implemented):
 4. For checkout/inventory incidents, compare order, payment, cart-item, and
    inventory-ledger rows for the affected variants before acting.
 5. For auth incidents, check token expiry, cookie presence, account active
-   state, and role grants — not token contents.
+   state, and role grants — not token contents. For refresh failures with
+   a present cookie, check the `refresh_sessions` row (`jti` hash, owner,
+   `revoked_at`, `expires_at`); a `500` with a well-formed token means
+   database outage, not an invalid token.
 6. For upload incidents, check MIME/size/dimensions of the rejected file
    and disk space under `storage/uploads/`.
 7. If a migration is implicated, stop writes, back up, and follow

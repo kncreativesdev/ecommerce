@@ -190,6 +190,27 @@ export function OrdersPage() {
     setBulkError(null);
   };
 
+  // Table columns: the select-all control lives in the first header cell
+  // (standard grid pattern) instead of a separate bar above the table, so
+  // the list starts one row higher. Same handler and accessible name as
+  // before; row checkboxes and the bulk bar are unchanged.
+  const orderColumns = [
+    {
+      key: 'select',
+      label: (
+        <input
+          type="checkbox"
+          checked={orders.length > 0 && orders.every((order) => selected[order.id])}
+          onChange={toggleSelectAll}
+          aria-label="Select all orders on this page"
+          className="h-4 w-4 cursor-pointer accent-current"
+        />
+      ),
+      className: 'w-10',
+    },
+    ...ORDER_COLUMNS.slice(1),
+  ];
+
   const runBulkUpdate = async () => {
     if (selectedIds.length === 0 || !bulkStatus || bulkPending) return;
     setBulkPending(true);
@@ -235,7 +256,7 @@ export function OrdersPage() {
 
       {!isLoading && !error && (
         <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
             <div role="search" className="relative w-full lg:max-w-md">
               <label htmlFor="order-search" className="sr-only">
                 Search orders by order number, customer, product, or SKU
@@ -485,7 +506,7 @@ export function OrdersPage() {
       {isLoading ? (
         <div role="status" aria-label="Loading orders" className="flex flex-col gap-2">
           {[0, 1, 2, 3, 4].map((index) => (
-            <div key={index} aria-hidden="true" className="h-16 animate-pulse rounded-lg bg-surface-muted" />
+            <div key={index} aria-hidden="true" className="h-11 animate-pulse rounded-lg bg-surface-muted" />
           ))}
         </div>
       ) : error ? (
@@ -504,24 +525,7 @@ export function OrdersPage() {
         />
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-lg border border-border bg-surface px-3.5 text-sm font-medium text-foreground">
-              <input
-                type="checkbox"
-                checked={orders.length > 0 && orders.every((order) => selected[order.id])}
-                onChange={toggleSelectAll}
-                aria-label="Select all orders on this page"
-                className="h-4 w-4 accent-current"
-              />
-              Select page
-            </label>
-            {selectedIds.length > 0 ? (
-              <span aria-live="polite" className="text-sm text-muted-foreground">
-                {selectedIds.length} selected
-              </span>
-            ) : null}
-          </div>
-          <Table caption="Customer orders" columns={ORDER_COLUMNS} minWidth="min-w-[960px]">
+          <Table caption="Customer orders" columns={orderColumns} minWidth="min-w-[960px]">
             {orders.map((order) => {
               const payment = latestPayment(order);
               return (
@@ -540,7 +544,6 @@ export function OrdersPage() {
                       <OrderRowVisual order={order} />
                       <span className="min-w-0">
                         <p className="font-semibold text-foreground">{order.orderNumber}</p>
-                        <p className="truncate text-xs text-muted-foreground">{orderItemCount(order)} items</p>
                       </span>
                     </span>
                   </td>

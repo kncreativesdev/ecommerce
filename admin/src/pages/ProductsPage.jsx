@@ -226,7 +226,7 @@ export function ProductsPage() {
       />
 
       {!isLoading && !error && (
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           {isAdmin ? (
           <div role="group" aria-label="Product status filter" className="inline-flex self-start rounded-lg border border-border bg-surface p-1">
             {SCOPES.map((option) => (
@@ -308,7 +308,7 @@ export function ProductsPage() {
       {isLoading ? (
         <div role="status" aria-label="Loading products" className="flex flex-col gap-2">
           {[0, 1, 2, 3, 4].map((index) => (
-            <div key={index} aria-hidden="true" className="h-16 animate-pulse rounded-lg bg-surface-muted" />
+            <div key={index} aria-hidden="true" className="h-11 animate-pulse rounded-lg bg-surface-muted" />
           ))}
         </div>
       ) : error ? (

@@ -6,10 +6,16 @@ import { cn } from '../../lib/cn.js';
  * token-driven borders/spacing. Callers render `<tr>` rows as children;
  * filtering/sorting/pagination stay caller-side (current admin scale needs
  * no data-grid framework).
+ *
+ * Row density is owned here, not per page: header cells use compact
+ * padding and body cells inherit the same rhythm through the container,
+ * so every consumer table stays compact and header/body columns stay
+ * aligned. Per-cell extras (alignment, truncation, tabular numerals)
+ * still apply — only the shared cell padding is centralized.
  */
 export function Table({ caption, columns = [], minWidth = 'min-w-[720px]', className, children }) {
   return (
-    <div className={cn('overflow-x-auto rounded-xl border border-border bg-card shadow-sm', className)}>
+    <div className={cn('overflow-x-auto rounded-xl border border-border bg-card shadow-sm [&_td]:px-3 [&_td]:py-2.5', className)}>
       <table className={cn('w-full border-collapse text-left text-sm', minWidth)}>
         {caption ? <caption className="sr-only">{caption}</caption> : null}
         <thead>
@@ -18,7 +24,7 @@ export function Table({ caption, columns = [], minWidth = 'min-w-[720px]', class
               <th
                 key={column.key}
                 scope="col"
-                className={cn('px-4 py-3 font-semibold', column.numeric && 'text-right', column.className)}
+                className={cn('px-3 py-2.5 font-semibold', column.numeric && 'text-right', column.className)}
               >
                 {column.label}
               </th>

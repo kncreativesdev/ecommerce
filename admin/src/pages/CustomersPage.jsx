@@ -92,9 +92,8 @@ export function CustomersPage() {
       />
 
       {!isLoading && !error && (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <div role="search" className="relative w-full lg:max-w-md">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          <div role="search" className="relative w-full sm:min-w-60 sm:flex-1 lg:max-w-md">
               <label htmlFor="customer-search" className="sr-only">
                 Search customers by email or name
               </label>
@@ -138,9 +137,6 @@ export function CustomersPage() {
                 What&apos;s searchable?
               </button>
             </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
             <label htmlFor="customer-status-filter" className="sr-only">
               Filter by account status
             </label>
@@ -177,14 +173,13 @@ export function CustomersPage() {
                 Clear filters
               </button>
             ) : null}
-          </div>
         </div>
       )}
 
       {isLoading ? (
         <div role="status" aria-label="Loading customers" className="flex flex-col gap-2">
           {[0, 1, 2, 3, 4].map((index) => (
-            <div key={index} aria-hidden="true" className="h-16 animate-pulse rounded-lg bg-surface-muted" />
+            <div key={index} aria-hidden="true" className="h-11 animate-pulse rounded-lg bg-surface-muted" />
           ))}
         </div>
       ) : error ? (
